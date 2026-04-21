@@ -1,181 +1,152 @@
-import requests
-import time
-import datetime
+import requests, time, datetime, os
 
-TOKEN = "8754365158:AAEWuxaCPNmnf_cU-LJZEU0r8215AdEB1fo"
-CHAT_ID = "7599785098"
+TOKEN = os.getenv("TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT"]
 
-entry_price = {}
 last_signal = {s: None for s in SYMBOLS}
-
-stats = {"win": 0, "loss": 0, "total": 0}
-performance = {"profit_pct": 0}
+entry_price = {}
+loss_streak = 0
+pause_until = 0
 
 # ===== Telegram =====
-def send_msg(text):
+def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": text})
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
     except:
-        print("發送失敗")
+        print("TG error")
 
 # ===== API =====
-def get_klines(symbol, interval="5m"):
-    try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=100"
-        data = requests.get(url, timeout=5).json()
-        return [float(x[4]) for x in data]
-    except:
-        return []
+def klines(symbol, interval):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=100"
+    data = requests.get(url, timeout=5).json()
+    return [float(x[4]) for x in data]
 
 # ===== 指標 =====
-def ma(data, n):
-    if len(data) < n:
-        return None
-    return sum(data[-n:]) / n
+def ma(data,n): return sum(data[-n:])/n
 
-def rsi(data, period=14):
-    if len(data) < period + 1:
-        return None
-
-    gains, losses = [], []
-    for i in range(1, len(data)):
-        diff = data[i] - data[i-1]
-        gains.append(max(diff,0))
-        losses.append(abs(min(diff,0)))
-
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
-
-    if avg_loss == 0:
-        return 100
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def ema(data, period):
-    k = 2 / (period + 1)
-    ema_val = data[0]
-    result = []
-    for p in data:
-        ema_val = p * k + ema_val * (1 - k)
-        result.append(ema_val)
-    return result
+def ema(data,p):
+    k=2/(p+1); e=data[0]; arr=[]
+    for d in data:
+        e=d*k+e*(1-k); arr.append(e)
+    return arr
 
 def macd(data):
-    ema12 = ema(data, 12)
-    ema26 = ema(data, 26)
-    macd_line = [a - b for a, b in zip(ema12, ema26)]
-    signal = ema(macd_line, 9)
-    return macd_line, signal
+    e12=ema(data,12); e26=ema(data,26)
+    m=[a-b for a,b in zip(e12,e26)]
+    s=ema(m,9)
+    return m,s
 
-def atr(data, period=14):
-    if len(data) < period + 1:
-        return 0
-    trs = [abs(data[i] - data[i-1]) for i in range(1, len(data))]
-    return sum(trs[-period:]) / period
+def rsi(data,p=14):
+    g,l=[],[]
+    for i in range(1,len(data)):
+        d=data[i]-data[i-1]
+        g.append(max(d,0)); l.append(abs(min(d,0)))
+    ag=sum(g[-p:])/p; al=sum(l[-p:])/p
+    if al==0: return 100
+    rs=ag/al
+    return 100-(100/(1+rs))
 
-# ===== 等待K棒 =====
-def wait_for_close():
-    last_min = -1
-    while True:
-        now = datetime.datetime.utcnow()
-        if now.minute % 5 == 0 and now.second < 2 and now.minute != last_min:
-            last_min = now.minute
-            break
-        time.sleep(1)
+def atr(data,p=14):
+    tr=[abs(data[i]-data[i-1]) for i in range(1,len(data))]
+    return sum(tr[-p:])/p
+
+def boll(data,n=20):
+    m=sum(data[-n:])/n
+    std=(sum([(x-m)**2 for x in data[-n:]])/n)**0.5
+    return m+2*std, m-2*std
+
+def adx_sim(data,p=14):
+    changes=[abs(data[i]-data[i-1]) for i in range(1,len(data))]
+    return sum(changes[-p:])/p
 
 # ===== 主邏輯 =====
-def main_logic():
-    for symbol in SYMBOLS:
+def run():
+    global loss_streak, pause_until
 
-        closes_5m = get_klines(symbol, "5m")
-        closes_15m = get_klines(symbol, "15m")
+    if time.time() < pause_until:
+        return
 
-        if len(closes_5m) < 30 or len(closes_15m) < 30:
+    for s in SYMBOLS:
+
+        c1 = klines(s,"1h")
+        c4 = klines(s,"4h")
+
+        if len(c1)<30 or len(c4)<30:
             continue
 
-        price = closes_5m[-1]
+        price = c1[-1]
 
-        ma8 = ma(closes_5m, 8)
-        ma21 = ma(closes_5m, 21)
-        ma8_prev = ma(closes_5m[:-1], 8)
-        ma21_prev = ma(closes_5m[:-1], 21)
+        ma8 = ma(c1,8); ma21 = ma(c1,21)
+        ma8_p = ma(c1[:-1],8); ma21_p = ma(c1[:-1],21)
 
-        rsi_val = rsi(closes_5m)
+        r = rsi(c1)
 
-        macd_line, signal_line = macd(closes_5m)
-        macd_now = macd_line[-1]
-        macd_prev = macd_line[-2]
-        signal_now = signal_line[-1]
-        signal_prev = signal_line[-2]
+        m,sg = macd(c1)
+        m0,m1 = m[-1],m[-2]
+        s0,s1 = sg[-1],sg[-2]
 
-        volatility = atr(closes_5m)
+        vol = atr(c1)
+        trend_up = ma(c4,8) > ma(c4,21)
+        trend_dn = ma(c4,8) < ma(c4,21)
 
-        trend_up = ma(closes_15m, 8) > ma(closes_15m, 21)
-        trend_down = ma(closes_15m, 8) < ma(closes_15m, 21)
+        upper, lower = boll(c1)
+        adx = adx_sim(c1)
 
-        # 過濾盤整
-        if volatility < 5:
-            continue
-
-        score = 0
-        if ma8 > ma21: score += 1
-        if macd_now > signal_now: score += 1
-        if rsi_val and rsi_val > 60: score += 1
-        if trend_up: score += 1
-
-        level = "🔥強" if score >= 4 else "⚠️中"
+        # ===== 過濾 =====
+        if vol/price < 0.003: continue
+        if adx < price*0.002: continue
 
         # ===== 做多 =====
         if (
-            ma8_prev < ma21_prev and ma8 > ma21 and
-            macd_prev < signal_prev and macd_now > signal_now and
-            rsi_val and rsi_val > 50 and trend_up
+            ma8_p < ma21_p and ma8 > ma21 and
+            m1 < s1 and m0 > s0 and
+            r > 55 and trend_up and
+            price < upper and
+            c1[-1] > c1[-2] > c1[-3]
         ):
-            if last_signal[symbol] != "long":
-                entry_price[symbol] = price
-                send_msg(f"{level} {symbol} 做多\n進場價:{price}")
-                last_signal[symbol] = "long"
+            if last_signal[s] != "long":
+                entry_price[s] = price
+                send(f"📈 {s} 做多\n進場:{price}\nSL:{round(price*0.98,2)}\nTP:{round(price*1.03,2)}")
+                last_signal[s] = "long"
 
         # ===== 做空 =====
         elif (
-            ma8_prev > ma21_prev and ma8 < ma21 and
-            macd_prev > signal_prev and macd_now < signal_now and
-            rsi_val and rsi_val < 50 and trend_down
+            ma8_p > ma21_p and ma8 < ma21 and
+            m1 > s1 and m0 < s0 and
+            r < 45 and trend_dn and
+            price > lower and
+            c1[-1] < c1[-2] < c1[-3]
         ):
-            if last_signal[symbol] != "short":
-                entry_price[symbol] = price
-                send_msg(f"{level} {symbol} 做空\n進場價:{price}")
-                last_signal[symbol] = "short"
+            if last_signal[s] != "short":
+                entry_price[s] = price
+                send(f"📉 {s} 做空\n進場:{price}\nSL:{round(price*1.02,2)}\nTP:{round(price*0.97,2)}")
+                last_signal[s] = "short"
 
-        # ===== 停利停損 + 統計 =====
-        if symbol in entry_price:
-            ep = entry_price[symbol]
+        # ===== 出場統計 =====
+        if s in entry_price:
+            ep = entry_price[s]
 
-            if last_signal[symbol] == "long":
+            if last_signal[s] == "long":
                 change = (price - ep) / ep * 100
+            else:
+                change = (ep - price) / ep * 100
 
-                if change >= 3:
-                    stats["win"] += 1
-                    stats["total"] += 1
-                    performance["profit_pct"] += change
-                    send_msg(f"🎯 {symbol} 停利 {round(change,2)}%")
-                    del entry_price[symbol]
+            if change >= 3 or change <= -2:
 
-                elif change <= -2:
-                    stats["loss"] += 1
-                    stats["total"] += 1
-                    performance["profit_pct"] += change
-                    send_msg(f"❌ {symbol} 停損 {round(change,2)}%")
-                    del entry_price[symbol]
+                if change > 0:
+                    loss_streak = 0
+                    send(f"🎯 {s} 停利 {round(change,2)}%")
+                else:
+                    loss_streak += 1
+                    send(f"❌ {s} 停損 {round(change,2)}%")
 
-# ===== 主迴圈 =====
-while True:
-    try:
-        wait_for_close()
-        main_logic()
-    except Exception as e:
-        print("錯誤:", e)
-        time.sleep(10)
+                del entry_price[s]
+
+                if loss_streak >= 2:
+                    pause_until = time.time() + 6*3600
+                    send("⚠️ 連續虧損，暫停6小時")
+
+run()
