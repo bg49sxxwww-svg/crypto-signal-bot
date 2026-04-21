@@ -1,7 +1,7 @@
 import requests, time, datetime, os
 
-TOKEN = os.getenv("TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+TOKEN = os.getenv("8754365158:AAEWuxaCPNmnf_cU-LJZEU0r8215AdEB1fo")
+CHAT_ID = os.getenv("7599785098")
 
 SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT"]
 
