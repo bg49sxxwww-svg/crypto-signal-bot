@@ -6,6 +6,7 @@
 
 import os
 import sys
+import csv
 import time
 import logging
 import statistics
@@ -573,9 +574,38 @@ def generate_trade_ideas(analyses):
     return ideas[:MAX_IDEAS]
 
 
-# -------------------- 策略回測 --------------------
+# -------------------- 策略回測與逐筆日誌 --------------------
 
-def backtest_ema_cross_baseline(symbol, candles=None):
+TRADE_LOG_FIELDS = ["strategy", "symbol", "side", "entry_time_utc", "entry_price", "exit_time_utc", "exit_price", "exit_reason", "return_pct", "fee_rate_one_way", "slippage_rate_one_way"]
+
+
+def utc_time_from_ms(timestamp_ms):
+    return datetime.datetime.fromtimestamp(timestamp_ms / 1000, tz=datetime.timezone.utc).isoformat()
+
+
+def record_closed_trade(trade_log, strategy, symbol, position, exit_timestamp, exit_fill, exit_reason, trade_return):
+    if trade_log is None:
+        return
+    trade_log.append({
+        "strategy": strategy, "symbol": symbol, "side": position["side"],
+        "entry_time_utc": utc_time_from_ms(position["entry_time"]),
+        "entry_price": round(position["entry"], 10),
+        "exit_time_utc": utc_time_from_ms(exit_timestamp),
+        "exit_price": round(exit_fill, 10), "exit_reason": exit_reason,
+        "return_pct": round(trade_return * 100, 6),
+        "fee_rate_one_way": FEE_RATE, "slippage_rate_one_way": SLIPPAGE_RATE,
+    })
+
+
+def write_trade_log(trade_log, path="trade_log.csv"):
+    with open(path, "w", newline="", encoding="utf-8-sig") as file:
+        writer = csv.DictWriter(file, fieldnames=TRADE_LOG_FIELDS)
+        writer.writeheader()
+        writer.writerows(trade_log)
+    logging.info("逐筆交易日誌已輸出：%s，共 %s 筆", path, len(trade_log))
+
+
+def backtest_ema_cross_baseline(symbol, candles=None, trade_log=None):
     """EMA 8/21 多空基準回測；與 P1 使用相同方向、成本及強制平倉口徑。"""
 
     if candles is None:
@@ -632,6 +662,7 @@ def backtest_ema_cross_baseline(symbol, candles=None):
                     trade_return = position["entry"] / exit_fill - 1
 
                 trades.append(trade_return)
+                record_closed_trade(trade_log, "baseline", symbol, position, candles[i + 1]["time"], exit_fill, "REVERSE_CROSS", trade_return)
                 equity *= max(0.0, 1 + trade_return)
                 position = None
 
@@ -641,11 +672,13 @@ def backtest_ema_cross_baseline(symbol, candles=None):
                 position = {
                     "side": "LONG",
                     "entry": next_open * (1 + cost),
+                    "entry_time": candles[i + 1]["time"],
                 }
             elif cross_down:
                 position = {
                     "side": "SHORT",
                     "entry": next_open * (1 - cost),
+                    "entry_time": candles[i + 1]["time"],
                 }
 
         # 使用實際進場後該根 K 線收盤價標記未實現損益。
@@ -672,6 +705,7 @@ def backtest_ema_cross_baseline(symbol, candles=None):
             final_return = position["entry"] / final_exit - 1
 
         trades.append(final_return)
+        record_closed_trade(trade_log, "baseline", symbol, position, candles[-1]["time"], final_exit, "FORCED_END", final_return)
         equity *= max(0.0, 1 + final_return)
         position = None
         forced_exit_at_end = True
@@ -731,7 +765,7 @@ def build_4h_candles(hourly_candles):
     return result
 
 
-def backtest_ema_cross(symbol, candles=None):
+def backtest_ema_cross(symbol, candles=None, trade_log=None):
     """
     P1 優化策略：
     - 1H EMA 8/21 交叉作為觸發
@@ -814,14 +848,17 @@ def backtest_ema_cross(symbol, candles=None):
             )
 
             exit_reference = None
+            exit_reason = None
             if stop_hit:
                 exit_reference = (
                     min(open_price, position["stop"])
                     if side == "LONG"
                     else max(open_price, position["stop"])
                 )
+                exit_reason = "STOP_LOSS"
             elif target_hit:
                 exit_reference = position["target"]
+                exit_reason = "TAKE_PROFIT"
 
             # 反向 EMA 交叉於本根開盤出場，避免等到收盤才假設成交。
             reverse_cross = (
@@ -832,6 +869,7 @@ def backtest_ema_cross(symbol, candles=None):
 
             if exit_reference is None and reverse_cross:
                 exit_reference = open_price
+                exit_reason = "REVERSE_CROSS"
 
             if exit_reference is not None:
                 if side == "LONG":
@@ -842,6 +880,7 @@ def backtest_ema_cross(symbol, candles=None):
                     trade_return = position["entry"] / exit_fill - 1
 
                 trades.append(trade_return)
+                record_closed_trade(trade_log, "P1", symbol, position, candle["time"], exit_fill, exit_reason, trade_return)
                 equity *= max(0.0, 1 + trade_return)
                 position = None
 
@@ -875,6 +914,7 @@ def backtest_ema_cross(symbol, candles=None):
                         position = {
                             "side": "LONG",
                             "entry": entry_fill,
+                            "entry_time": candles[i + 1]["time"],
                             "stop": next_open - atr * 1.5,
                             "target": next_open + atr * 2.5,
                         }
@@ -883,6 +923,7 @@ def backtest_ema_cross(symbol, candles=None):
                         position = {
                             "side": "SHORT",
                             "entry": entry_fill,
+                            "entry_time": candles[i + 1]["time"],
                             "stop": next_open + atr * 1.5,
                             "target": next_open - atr * 2.5,
                         }
@@ -912,6 +953,7 @@ def backtest_ema_cross(symbol, candles=None):
             final_return = position["entry"] / final_exit - 1
 
         trades.append(final_return)
+        record_closed_trade(trade_log, "P1", symbol, position, candles[-1]["time"], final_exit, "FORCED_END", final_return)
         equity *= max(0.0, 1 + final_return)
         position = None
         forced_exit_at_end = True
@@ -1181,18 +1223,24 @@ def main():
 
     logging.info("執行策略回測")
     backtests = {}
+    trade_log = []
 
     for symbol in SYMBOLS:
         try:
             historical_candles = get_backtest_klines(symbol, BACKTEST_DAYS)
             backtests[symbol] = {
-                "baseline": backtest_ema_cross_baseline(symbol, historical_candles),
-                "optimized": backtest_ema_cross(symbol, historical_candles),
+                "baseline": backtest_ema_cross_baseline(symbol, historical_candles, trade_log),
+                "optimized": backtest_ema_cross(symbol, historical_candles, trade_log),
             }
         except Exception:
             logging.exception("%s 回測執行失敗", symbol)
             backtests[symbol] = None
         time.sleep(0.2)
+
+    try:
+        write_trade_log(trade_log)
+    except OSError:
+        logging.exception("逐筆交易日誌輸出失敗")
 
     logging.info("取得新聞")
     news = get_crypto_news()
