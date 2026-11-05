@@ -653,15 +653,28 @@ def backtest_ema_cross(symbol):
         )
         max_drawdown = max(max_drawdown, drawdown)
 
-    open_position = position is not None
+    # 回測結束時，若仍有持倉，按最後一根已收盤 K 線強制平倉。
+    # 如此交易次數、勝率、Profit Factor 與累積報酬採用相同統計口徑。
+    forced_exit_at_end = position is not None
 
-    if open_position:
+    if forced_exit_at_end:
         final_price = candles[-1]["close"] * (
             1 - FEE_RATE - SLIPPAGE_RATE
         )
-        final_equity = equity * (final_price / position)
-    else:
-        final_equity = equity
+        final_trade_return = final_price / position - 1
+        trades.append(final_trade_return)
+        equity *= (1 + final_trade_return)
+        position = None
+
+    final_equity = equity
+    open_position = False
+
+    peak = max(peak, final_equity)
+    final_drawdown = (
+        (peak - final_equity) / peak
+        if peak > 0 else 0
+    )
+    max_drawdown = max(max_drawdown, final_drawdown)
 
     wins = [x for x in trades if x > 0]
     losses = [x for x in trades if x < 0]
@@ -690,6 +703,7 @@ def backtest_ema_cross(symbol):
         "bars": len(candles),
         "period_days": period_days,
         "open_position": open_position,
+        "forced_exit_at_end": forced_exit_at_end,
         "low_sample": len(trades) < BACKTEST_MIN_TRADES,
         "insufficient_data": False,
     }
@@ -810,7 +824,7 @@ def build_report(analyses, ideas, backtests, news):
 
     # 4. 回測
     report.append("【4. 策略回測】")
-    report.append("策略：1H EMA 8/21 交叉；僅統計已完成的平倉交易。")
+    report.append("策略：1H EMA 8/21 交叉；回測結束時將未平倉部位按最後收盤價強制平倉，統一統計口徑。")
     report.append("假設：單邊手續費 0.1%、滑價 0.05%；不含資金費率及槓桿。")
 
     for symbol, result in backtests.items():
@@ -838,6 +852,11 @@ def build_report(analyses, ideas, backtests, news):
             f"Profit Factor：{pf}",
             f"最大回撤：{result['max_drawdown']:.2f}%",
             f"累積報酬：{result['total_return']:.2f}%",
+            (
+                "期末未平倉部位：已按最後收盤價強制平倉"
+                if result.get("forced_exit_at_end", False)
+                else "期末未平倉部位：無"
+            ),
             "",
         ])
 
