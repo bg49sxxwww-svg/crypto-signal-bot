@@ -575,25 +575,20 @@ def generate_trade_ideas(analyses):
 # -------------------- 策略回測 --------------------
 
 def backtest_ema_cross(symbol):
-    """
-    簡單 EMA 8/21 交叉回測。
-    使用已收盤的 1H K 線。
-    手續費採單邊 0.1% 假設。
-    不包含滑價、資金費率及槓桿。
-    """
+    """EMA 8/21 回測：下一根 K 線開盤成交，計入手續費及滑價。"""
 
-    candles = get_klines(symbol, "1h", 1000)
+    candles = get_backtest_klines(symbol, BACKTEST_DAYS)
 
     if len(candles) < 100:
-        return None
+        return {
+            "insufficient_data": True,
+            "bars": len(candles),
+            "period_days": 0,
+        }
 
-    prices = [candle["close"] for candle in candles]
-
+    prices = [c["close"] for c in candles]
     fast = ema_series(prices, 8)
     slow = ema_series(prices, 21)
-
-    if len(fast) != len(slow):
-        return None
 
     trades = []
     equity = 1.0
@@ -601,7 +596,7 @@ def backtest_ema_cross(symbol):
     max_drawdown = 0.0
     position = None
 
-    for i in range(22, len(prices)):
+    for i in range(22, len(candles) - 1):
         previous_fast = fast[i - 1]
         previous_slow = slow[i - 1]
         current_fast = fast[i]
@@ -611,57 +606,84 @@ def backtest_ema_cross(symbol):
             previous_fast <= previous_slow
             and current_fast > current_slow
         )
-
         cross_down = (
             previous_fast >= previous_slow
             and current_fast < current_slow
         )
 
-        price = prices[i]
+        next_open = candles[i + 1]["open"]
+        next_close = candles[i + 1]["close"]
 
         if position is None and cross_up:
-            position = price * (1 + FEE_RATE)
+            position = next_open * (
+                1 + FEE_RATE + SLIPPAGE_RATE
+            )
 
         elif position is not None and cross_down:
-            exit_price = price * (1 - FEE_RATE)
-            trade_return = (exit_price / position) - 1
-
+            exit_price = next_open * (
+                1 - FEE_RATE - SLIPPAGE_RATE
+            )
+            trade_return = exit_price / position - 1
             trades.append(trade_return)
             equity *= (1 + trade_return)
-
-            peak = max(peak, equity)
-            drawdown = (peak - equity) / peak
-
-            max_drawdown = max(max_drawdown, drawdown)
             position = None
 
-    if not trades:
-        return {
-            "trades": 0,
-            "win_rate": 0,
-            "profit_factor": None,
-            "max_drawdown": max_drawdown * 100,
-            "total_return": (equity - 1) * 100,
-        }
+        marked_equity = equity
 
-    wins = [value for value in trades if value > 0]
-    losses = [value for value in trades if value < 0]
+        if position is not None:
+            estimated_exit = next_close * (
+                1 - FEE_RATE - SLIPPAGE_RATE
+            )
+            marked_equity = equity * (
+                estimated_exit / position
+            )
+
+        peak = max(peak, marked_equity)
+        drawdown = (
+            (peak - marked_equity) / peak
+            if peak > 0 else 0
+        )
+        max_drawdown = max(max_drawdown, drawdown)
+
+    open_position = position is not None
+
+    if open_position:
+        final_price = candles[-1]["close"] * (
+            1 - FEE_RATE - SLIPPAGE_RATE
+        )
+        final_equity = equity * (final_price / position)
+    else:
+        final_equity = equity
+
+    wins = [x for x in trades if x > 0]
+    losses = [x for x in trades if x < 0]
 
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
 
     profit_factor = (
         gross_profit / gross_loss
-        if gross_loss > 0
-        else None
+        if gross_loss > 0 else None
     )
+
+    period_days = (
+        candles[-1]["time"] - candles[0]["time"]
+    ) / (24 * 60 * 60 * 1000)
 
     return {
         "trades": len(trades),
-        "win_rate": len(wins) / len(trades) * 100,
+        "win_rate": (
+            len(wins) / len(trades) * 100
+            if trades else 0
+        ),
         "profit_factor": profit_factor,
         "max_drawdown": max_drawdown * 100,
-        "total_return": (equity - 1) * 100,
+        "total_return": (final_equity - 1) * 100,
+        "bars": len(candles),
+        "period_days": period_days,
+        "open_position": open_position,
+        "low_sample": len(trades) < BACKTEST_MIN_TRADES,
+        "insufficient_data": False,
     }
 
 
