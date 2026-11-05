@@ -190,7 +190,7 @@ def get_klines(symbol, interval="1h", limit=500):
 
         return []
         
-        def get_backtest_klines(symbol, days=BACKTEST_DAYS):
+def get_backtest_klines(symbol, days=BACKTEST_DAYS):
     """使用 OKX 歷史 K 線 API 取得回測資料。"""
 
     inst_id = symbol.replace("USDT", "-USDT")
