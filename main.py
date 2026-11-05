@@ -575,7 +575,7 @@ def build_report(analyses, ideas, backtests, news):
     report = [
         "【Crypto Signal Bot 加密貨幣市場報告】",
         f"資料時間：{now}",
-        "資料來源：Binance 公開市場 API、CoinDesk RSS",
+        "資料來源：OKX 公開市場 API、CoinDesk RSS",
         "分析範圍：BTC、ETH、主要山寨幣",
         "",
     ]
