@@ -189,7 +189,8 @@ def get_klines(symbol, interval="1h", limit=500):
         )
 
         return []
-        
+
+
 def get_backtest_klines(symbol, days=BACKTEST_DAYS):
     """使用 OKX 歷史 K 線 API 取得回測資料。"""
 
@@ -581,9 +582,16 @@ def backtest_ema_cross(symbol):
 
     if len(candles) < 100:
         return {
-            "insufficient_data": True,
+            "trades": 0,
+            "win_rate": 0.0,
+            "profit_factor": None,
+            "max_drawdown": 0.0,
+            "total_return": 0.0,
             "bars": len(candles),
-            "period_days": 0,
+            "period_days": 0.0,
+            "open_position": False,
+            "low_sample": True,
+            "insufficient_data": True,
         }
 
     prices = [c["close"] for c in candles]
@@ -803,11 +811,18 @@ def build_report(analyses, ideas, backtests, news):
     # 4. 回測
     report.append("【4. 策略回測】")
     report.append("策略：1H EMA 8/21 交叉；僅統計已完成的平倉交易。")
-    report.append("假設：單邊手續費 0.1%，不含滑價、資金費率及槓桿。")
+    report.append("假設：單邊手續費 0.1%、滑價 0.05%；不含資金費率及槓桿。")
 
     for symbol, result in backtests.items():
         if result is None:
-            report.append(f"{symbol}：歷史資料不足，無法回測。")
+            report.append(f"{symbol}：回測執行失敗，請檢查日誌。")
+            continue
+
+        if result.get("insufficient_data", False):
+            report.append(
+                f"{symbol}：資料不足（{result.get('bars', 0)} 根 K 線），"
+                "未計算績效指標。"
+            )
             continue
 
         pf = (
@@ -907,7 +922,11 @@ def main():
     backtests = {}
 
     for symbol in SYMBOLS:
-        backtests[symbol] = backtest_ema_cross(symbol)
+        try:
+            backtests[symbol] = backtest_ema_cross(symbol)
+        except Exception:
+            logging.exception("%s 回測執行失敗", symbol)
+            backtests[symbol] = None
         time.sleep(0.2)
 
     logging.info("取得新聞")
