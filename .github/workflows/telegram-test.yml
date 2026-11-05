@@ -1,0 +1,27 @@
+name: Telegram Connection Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  telegram-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Telegram test message
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+        run: |
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            echo "Missing Telegram secrets"
+            exit 1
+          fi
+
+          response=$(curl -sS --max-time 20 \
+            -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=Telegram Bot 連線測試成功！GitHub Actions 已正常連線。")
+
+          python -c 'import json,sys; d=json.loads(sys.argv[1]); print("Telegram API:", d.get("description", "OK")); sys.exit(0 if d.get("ok") else 1)' "$response"
