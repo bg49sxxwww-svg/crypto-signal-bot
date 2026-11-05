@@ -38,3 +38,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PYTHONUNBUFFERED: "1"
         run: python main.py
+
+      - name: Upload trade log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-trade-log
+          path: trade_log.csv
+          if-no-files-found: warn
+          retention-days: 30
