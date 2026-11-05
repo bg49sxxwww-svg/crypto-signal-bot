@@ -20,7 +20,7 @@ import requests
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-BINANCE_URL = "https://api.binance.com"
+OKX_URL = "https://www.okx.com"
 NEWS_RSS_URL = "https://www.coindesk.com/arc/outboundfeeds/rss/"
 
 SYMBOLS = [
@@ -96,32 +96,62 @@ def send_long_message(message):
 # -------------------- 市場資料 --------------------
 
 def get_klines(symbol, interval="1h", limit=500):
-    """取得 Binance K 線 OHLCV 資料。"""
+    """使用 OKX 公開 API 取得 OHLCV K 線資料。"""
 
-    url = f"{BINANCE_URL}/api/v3/klines"
+    bar_map = {
+        "1h": "1H",
+        "1d": "1D",
+        "1w": "1W",
+    }
+
+    bar = bar_map.get(interval.lower())
+
+    if not bar:
+        logging.error("不支援的週期：%s", interval)
+        return []
+
+    inst_id = symbol.replace("USDT", "-USDT")
 
     try:
         response = requests.get(
-            url,
+            f"{OKX_URL}/api/v5/market/candles",
             params={
-                "symbol": symbol,
-                "interval": interval,
-                "limit": limit,
+                "instId": inst_id,
+                "bar": bar,
+                "limit": str(min(limit, 300)),
             },
             timeout=REQUEST_TIMEOUT,
+            headers={
+                "User-Agent": "CryptoSignalBot/1.0"
+            },
         )
 
         response.raise_for_status()
-        raw = response.json()
+        payload = response.json()
 
-        if not isinstance(raw, list):
+        if payload.get("code") != "0":
+            logging.warning(
+                "%s API錯誤：%s",
+                symbol,
+                payload.get("msg")
+            )
             return []
 
+        raw = payload.get("data", [])
         candles = []
 
-        for item in raw:
+        # OKX 回傳由新到舊，反轉為舊到新
+        for item in reversed(raw):
+
+            if len(item) < 9:
+                continue
+
+            # 只使用已收盤 K 線
+            if str(item[8]) != "1":
+                continue
+
             candles.append({
-                "time": item[0],
+                "time": int(item[0]),
                 "open": float(item[1]),
                 "high": float(item[2]),
                 "low": float(item[3]),
@@ -129,17 +159,29 @@ def get_klines(symbol, interval="1h", limit=500):
                 "volume": float(item[5]),
             })
 
-        # 排除尚未收盤的最後一根 K 線
-        now_ms = int(time.time() * 1000)
-        candles = [
-            candle for candle in candles
-            if candle["time"] < now_ms
-        ]
+        if not candles:
+            logging.warning(
+                "%s %s 沒有有效 K 線",
+                symbol,
+                interval
+            )
 
         return candles
 
-    except (requests.RequestException, ValueError, KeyError, TypeError) as error:
-        logging.warning("%s %s K線取得失敗：%s", symbol, interval, error)
+    except (
+        requests.RequestException,
+        ValueError,
+        KeyError,
+        TypeError
+    ) as error:
+
+        logging.warning(
+            "%s %s OKX資料取得失敗：%s",
+            symbol,
+            interval,
+            error
+        )
+
         return []
 
 
