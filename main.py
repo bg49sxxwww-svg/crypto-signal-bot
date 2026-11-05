@@ -575,10 +575,11 @@ def generate_trade_ideas(analyses):
 
 # -------------------- 策略回測 --------------------
 
-def backtest_ema_cross_baseline(symbol):
-    """EMA 8/21 回測：下一根 K 線開盤成交，計入手續費及滑價。"""
+def backtest_ema_cross_baseline(symbol, candles=None):
+    """EMA 8/21 基準回測；允許共用已下載的歷史 K 線。"""
 
-    candles = get_backtest_klines(symbol, BACKTEST_DAYS)
+    if candles is None:
+        candles = get_backtest_klines(symbol, BACKTEST_DAYS)
 
     if len(candles) < 100:
         return {
@@ -737,7 +738,7 @@ def build_4h_candles(hourly_candles):
     return result
 
 
-def backtest_ema_cross(symbol):
+def backtest_ema_cross(symbol, candles=None):
     """
     P1 優化策略：
     - 1H EMA 8/21 交叉作為觸發
@@ -746,7 +747,8 @@ def backtest_ema_cross(symbol):
     - ATR(14) 動態停損 1.5 ATR、停利 2.5 ATR
     - 單筆只持有一個方向；同根 K 線同時觸及停損與停利時，保守判定停損先成交
     """
-    candles = get_backtest_klines(symbol, BACKTEST_DAYS)
+    if candles is None:
+        candles = get_backtest_klines(symbol, BACKTEST_DAYS)
 
     empty_result = {
         "trades": 0,
@@ -769,11 +771,11 @@ def backtest_ema_cross(symbol):
     fast = ema_series(closes, 8)
     slow = ema_series(closes, 21)
     atr_values = [
-        calculate_atr(candles[:i + 1], 14)
+        calculate_atr(candles[max(0, i - 14):i + 1], 14)
         for i in range(len(candles))
     ]
     rsi_values = [
-        calculate_rsi(closes[:i + 1], 14)
+        calculate_rsi(closes[max(0, i - 14):i + 1], 14)
         for i in range(len(candles))
     ]
 
@@ -1186,9 +1188,10 @@ def main():
 
     for symbol in SYMBOLS:
         try:
+            historical_candles = get_backtest_klines(symbol, BACKTEST_DAYS)
             backtests[symbol] = {
-                "baseline": backtest_ema_cross_baseline(symbol),
-                "optimized": backtest_ema_cross(symbol),
+                "baseline": backtest_ema_cross_baseline(symbol, historical_candles),
+                "optimized": backtest_ema_cross(symbol, historical_candles),
             }
         except Exception:
             logging.exception("%s 回測執行失敗", symbol)
