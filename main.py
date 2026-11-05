@@ -575,7 +575,7 @@ def generate_trade_ideas(analyses):
 
 # -------------------- 策略回測 --------------------
 
-def backtest_ema_cross(symbol):
+def backtest_ema_cross_baseline(symbol):
     """EMA 8/21 回測：下一根 K 線開盤成交，計入手續費及滑價。"""
 
     candles = get_backtest_klines(symbol, BACKTEST_DAYS)
@@ -709,6 +709,242 @@ def backtest_ema_cross(symbol):
     }
 
 
+def build_4h_candles(hourly_candles):
+    """由已收盤 1H K 線聚合完整 4H K 線，避免額外 API 分頁及未收盤資料。"""
+    interval_ms = 4 * 60 * 60 * 1000
+    grouped = {}
+
+    for candle in hourly_candles:
+        bucket = (candle["time"] // interval_ms) * interval_ms
+        grouped.setdefault(bucket, []).append(candle)
+
+    result = []
+    for bucket, rows in sorted(grouped.items()):
+        rows = sorted(rows, key=lambda item: item["time"])
+        expected = [bucket + i * 60 * 60 * 1000 for i in range(4)]
+        if [row["time"] for row in rows] != expected:
+            continue
+
+        result.append({
+            "time": bucket,
+            "open": rows[0]["open"],
+            "high": max(row["high"] for row in rows),
+            "low": min(row["low"] for row in rows),
+            "close": rows[-1]["close"],
+            "volume": sum(row["volume"] for row in rows),
+        })
+
+    return result
+
+
+def backtest_ema_cross(symbol):
+    """
+    P1 優化策略：
+    - 1H EMA 8/21 交叉作為觸發
+    - 已完成 4H EMA 8/21 同向過濾
+    - RSI(14) 動能確認
+    - ATR(14) 動態停損 1.5 ATR、停利 2.5 ATR
+    - 單筆只持有一個方向；同根 K 線同時觸及停損與停利時，保守判定停損先成交
+    """
+    candles = get_backtest_klines(symbol, BACKTEST_DAYS)
+
+    empty_result = {
+        "trades": 0,
+        "win_rate": 0.0,
+        "profit_factor": None,
+        "max_drawdown": 0.0,
+        "total_return": 0.0,
+        "bars": len(candles),
+        "period_days": 0.0,
+        "open_position": False,
+        "forced_exit_at_end": False,
+        "low_sample": True,
+        "insufficient_data": True,
+    }
+
+    if len(candles) < 250:
+        return empty_result
+
+    closes = [c["close"] for c in candles]
+    fast = ema_series(closes, 8)
+    slow = ema_series(closes, 21)
+    atr_values = [
+        calculate_atr(candles[:i + 1], 14)
+        for i in range(len(candles))
+    ]
+    rsi_values = [
+        calculate_rsi(closes[:i + 1], 14)
+        for i in range(len(candles))
+    ]
+
+    four_hour = build_4h_candles(candles)
+    if len(four_hour) < 25:
+        return empty_result
+
+    htf_closes = [c["close"] for c in four_hour]
+    htf_fast = ema_series(htf_closes, 8)
+    htf_slow = ema_series(htf_closes, 21)
+    htf_index = {c["time"]: i for i, c in enumerate(four_hour)}
+    four_hours_ms = 4 * 60 * 60 * 1000
+    hour_ms = 60 * 60 * 1000
+
+    trades = []
+    equity = 1.0
+    peak = 1.0
+    max_drawdown = 0.0
+    position = None
+    forced_exit_at_end = False
+    cost = FEE_RATE + SLIPPAGE_RATE
+
+    for i in range(60, len(candles)):
+        candle = candles[i]
+        open_price = candle["open"]
+        high_price = candle["high"]
+        low_price = candle["low"]
+        close_price = candle["close"]
+
+        # 先處理既有倉位。若同根 K 線同時觸及停損與停利，採停損優先。
+        if position is not None:
+            side = position["side"]
+            stop_hit = (
+                low_price <= position["stop"]
+                if side == "LONG"
+                else high_price >= position["stop"]
+            )
+            target_hit = (
+                high_price >= position["target"]
+                if side == "LONG"
+                else low_price <= position["target"]
+            )
+
+            exit_reference = None
+            if stop_hit:
+                exit_reference = (
+                    min(open_price, position["stop"])
+                    if side == "LONG"
+                    else max(open_price, position["stop"])
+                )
+            elif target_hit:
+                exit_reference = position["target"]
+
+            # 反向 EMA 交叉於本根開盤出場，避免等到收盤才假設成交。
+            reverse_cross = (
+                fast[i - 1] < slow[i - 1]
+                if side == "LONG"
+                else fast[i - 1] > slow[i - 1]
+            )
+
+            if exit_reference is None and reverse_cross:
+                exit_reference = open_price
+
+            if exit_reference is not None:
+                if side == "LONG":
+                    exit_fill = exit_reference * (1 - cost)
+                    trade_return = exit_fill / position["entry"] - 1
+                else:
+                    exit_fill = exit_reference * (1 + cost)
+                    trade_return = position["entry"] / exit_fill - 1
+
+                trades.append(trade_return)
+                equity *= max(0.0, 1 + trade_return)
+                position = None
+
+        # 使用目前已收盤 1H K 線的訊號，在下一根 K 線開盤進場。
+        if position is None and i < len(candles) - 1:
+            previous_fast = fast[i - 1]
+            previous_slow = slow[i - 1]
+            current_fast = fast[i]
+            current_slow = slow[i]
+
+            cross_up = previous_fast <= previous_slow and current_fast > current_slow
+            cross_down = previous_fast >= previous_slow and current_fast < current_slow
+
+            # 只使用本根 1H 收盤時已經完整收盤的 4H K 線，避免未來資料。
+            close_time = candle["time"] + hour_ms
+            completed_bucket = ((close_time - 1) // four_hours_ms) * four_hours_ms
+            completed_idx = htf_index.get(completed_bucket)
+
+            if completed_idx is not None and completed_idx >= 21:
+                trend_up = htf_fast[completed_idx] > htf_slow[completed_idx]
+                trend_down = htf_fast[completed_idx] < htf_slow[completed_idx]
+                rsi = rsi_values[i]
+                atr = atr_values[i]
+
+                if atr is not None and atr > 0 and rsi is not None:
+                    next_open = candles[i + 1]["open"]
+
+                    if cross_up and trend_up and rsi >= 50:
+                        entry_fill = next_open * (1 + cost)
+                        position = {
+                            "side": "LONG",
+                            "entry": entry_fill,
+                            "stop": next_open - atr * 1.5,
+                            "target": next_open + atr * 2.5,
+                        }
+                    elif cross_down and trend_down and rsi <= 50:
+                        entry_fill = next_open * (1 - cost)
+                        position = {
+                            "side": "SHORT",
+                            "entry": entry_fill,
+                            "stop": next_open + atr * 1.5,
+                            "target": next_open - atr * 2.5,
+                        }
+
+        # 以收盤價估算未實現權益，納入最大回撤監控。
+        marked_equity = equity
+        if position is not None:
+            if position["side"] == "LONG":
+                estimated_exit = close_price * (1 - cost)
+                marked_equity = equity * (estimated_exit / position["entry"])
+            else:
+                estimated_exit = close_price * (1 + cost)
+                marked_equity = equity * (position["entry"] / estimated_exit)
+
+        peak = max(peak, marked_equity)
+        drawdown = (peak - marked_equity) / peak if peak > 0 else 0.0
+        max_drawdown = max(max_drawdown, drawdown)
+
+    if position is not None:
+        final_close = candles[-1]["close"]
+        if position["side"] == "LONG":
+            final_exit = final_close * (1 - cost)
+            final_return = final_exit / position["entry"] - 1
+        else:
+            final_exit = final_close * (1 + cost)
+            final_return = position["entry"] / final_exit - 1
+
+        trades.append(final_return)
+        equity *= max(0.0, 1 + final_return)
+        position = None
+        forced_exit_at_end = True
+
+    wins = [value for value in trades if value > 0]
+    losses = [value for value in trades if value < 0]
+    gross_profit = sum(wins)
+    gross_loss = abs(sum(losses))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
+
+    peak = max(peak, equity)
+    final_drawdown = (peak - equity) / peak if peak > 0 else 0.0
+    max_drawdown = max(max_drawdown, final_drawdown)
+
+    period_days = (candles[-1]["time"] - candles[0]["time"]) / (24 * hour_ms)
+
+    return {
+        "trades": len(trades),
+        "win_rate": len(wins) / len(trades) * 100 if trades else 0.0,
+        "profit_factor": profit_factor,
+        "max_drawdown": max_drawdown * 100,
+        "total_return": (equity - 1) * 100,
+        "bars": len(candles),
+        "period_days": period_days,
+        "open_position": False,
+        "forced_exit_at_end": forced_exit_at_end,
+        "low_sample": len(trades) < BACKTEST_MIN_TRADES,
+        "insufficient_data": False,
+    }
+
+
 # -------------------- 新聞分析 --------------------
 
 def get_crypto_news():
@@ -824,41 +1060,49 @@ def build_report(analyses, ideas, backtests, news):
 
     # 4. 回測
     report.append("【4. 策略回測】")
-    report.append("策略：1H EMA 8/21 交叉；回測結束時將未平倉部位按最後收盤價強制平倉，統一統計口徑。")
+    report.append("基準策略：1H EMA 8/21 交叉；優化策略：1H EMA 8/21 + 已完成 4H EMA 趨勢 + RSI(14) 確認 + ATR 停損 1.5 倍／停利 2.5 倍。")
+    report.append("兩組策略均於回測結束時強制平倉；同根 K 線同時觸及停損與停利時，保守採停損先成交。")
     report.append("假設：單邊手續費 0.1%、滑價 0.05%；不含資金費率及槓桿。")
 
-    for symbol, result in backtests.items():
-        if result is None:
+    for symbol, pair in backtests.items():
+        if pair is None:
             report.append(f"{symbol}：回測執行失敗，請檢查日誌。")
             continue
 
-        if result.get("insufficient_data", False):
-            report.append(
-                f"{symbol}：資料不足（{result.get('bars', 0)} 根 K 線），"
-                "未計算績效指標。"
+        for label, result in pair.items():
+            report.append(f"{symbol}｜{ '基準策略' if label == 'baseline' else 'P1 優化策略' }")
+
+            if result.get("insufficient_data", False):
+                report.append(
+                    f"資料不足（{result.get('bars', 0)} 根 K 線），未計算績效指標。"
+                )
+                report.append("")
+                continue
+
+            pf = (
+                f"{result['profit_factor']:.2f}"
+                if result["profit_factor"] is not None
+                else "無法計算"
             )
-            continue
 
-        pf = (
-            f"{result['profit_factor']:.2f}"
-            if result["profit_factor"] is not None
-            else "無法計算"
-        )
-
-        report.extend([
-            f"{symbol}：",
-            f"交易次數：{result['trades']}",
-            f"勝率：{result['win_rate']:.2f}%",
-            f"Profit Factor：{pf}",
-            f"最大回撤：{result['max_drawdown']:.2f}%",
-            f"累積報酬：{result['total_return']:.2f}%",
-            (
-                "期末未平倉部位：已按最後收盤價強制平倉"
-                if result.get("forced_exit_at_end", False)
-                else "期末未平倉部位：無"
-            ),
-            "",
-        ])
+            report.extend([
+                f"交易次數：{result['trades']}",
+                f"勝率：{result['win_rate']:.2f}%",
+                f"Profit Factor：{pf}",
+                f"最大回撤：{result['max_drawdown']:.2f}%",
+                f"累積報酬：{result['total_return']:.2f}%",
+                (
+                    "低樣本警示：交易次數少於設定門檻"
+                    if result.get("low_sample", False)
+                    else "樣本數：達到最低交易次數門檻"
+                ),
+                (
+                    "期末未平倉部位：已按最後收盤價強制平倉"
+                    if result.get("forced_exit_at_end", False)
+                    else "期末未平倉部位：無"
+                ),
+                "",
+            ])
 
     report.append(
         "注意：此為簡化歷史測試，不代表未來績效；"
@@ -942,7 +1186,10 @@ def main():
 
     for symbol in SYMBOLS:
         try:
-            backtests[symbol] = backtest_ema_cross(symbol)
+            backtests[symbol] = {
+                "baseline": backtest_ema_cross_baseline(symbol),
+                "optimized": backtest_ema_cross(symbol),
+            }
         except Exception:
             logging.exception("%s 回測執行失敗", symbol)
             backtests[symbol] = None
