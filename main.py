@@ -189,6 +189,138 @@ def get_klines(symbol, interval="1h", limit=500):
         )
 
         return []
+        
+        def get_backtest_klines(symbol, days=BACKTEST_DAYS):
+    """使用 OKX 歷史 K 線 API 取得回測資料。"""
+
+    inst_id = symbol.replace("USDT", "-USDT")
+    cutoff_ms = int(time.time() * 1000) - days * 24 * 60 * 60 * 1000
+
+    candles_by_time = {}
+
+    # 先取得最近 300 根已收盤 K 線
+    recent = get_klines(symbol, "1h", 300)
+
+    for candle in recent:
+        if candle["time"] >= cutoff_ms:
+            candles_by_time[candle["time"]] = candle
+
+    if not candles_by_time:
+        logging.warning("%s 沒有取得初始回測 K 線", symbol)
+        return []
+
+    oldest_ts = min(candles_by_time)
+
+    # 使用 history-candles API 向更早的時間分頁
+    while (
+        oldest_ts > cutoff_ms
+        and len(candles_by_time) < BACKTEST_MAX_BARS
+    ):
+        try:
+            response = requests.get(
+                f"{OKX_URL}/api/v5/market/history-candles",
+                params={
+                    "instId": inst_id,
+                    "bar": "1H",
+                    "after": str(oldest_ts),
+                    "limit": "100",
+                },
+                timeout=REQUEST_TIMEOUT,
+                headers={
+                    "User-Agent": "CryptoSignalBot/1.0"
+                },
+            )
+
+            response.raise_for_status()
+            payload = response.json()
+
+            if payload.get("code") != "0":
+                logging.warning(
+                    "%s 歷史 K 線 API 錯誤：%s",
+                    symbol,
+                    payload.get("msg")
+                )
+                break
+
+            raw = payload.get("data", [])
+
+            if not raw:
+                break
+
+            page_oldest_ts = min(int(item[0]) for item in raw)
+
+            if page_oldest_ts >= oldest_ts:
+                logging.warning(
+                    "%s 歷史 K 線分頁沒有往前推進",
+                    symbol
+                )
+                break
+
+            # OKX 回傳由新到舊，轉為由舊到新
+            for item in reversed(raw):
+                if len(item) < 9:
+                    continue
+
+                if str(item[8]) != "1":
+                    continue
+
+                timestamp = int(item[0])
+
+                if timestamp < cutoff_ms:
+                    continue
+
+                if timestamp >= oldest_ts:
+                    continue
+
+                candles_by_time[timestamp] = {
+                    "time": timestamp,
+                    "open": float(item[1]),
+                    "high": float(item[2]),
+                    "low": float(item[3]),
+                    "close": float(item[4]),
+                    "volume": float(item[5]),
+                }
+
+            oldest_ts = page_oldest_ts
+
+            time.sleep(0.12)
+
+        except (
+            requests.RequestException,
+            ValueError,
+            KeyError,
+            TypeError,
+            IndexError,
+        ) as error:
+            logging.warning(
+                "%s 歷史 K 線取得失敗：%s",
+                symbol,
+                error
+            )
+            break
+
+    candles = sorted(
+        candles_by_time.values(),
+        key=lambda candle: candle["time"]
+    )
+
+    candles = candles[-BACKTEST_MAX_BARS:]
+
+    actual_days = (
+        (candles[-1]["time"] - candles[0]["time"])
+        / (24 * 60 * 60 * 1000)
+        if len(candles) >= 2
+        else 0
+    )
+
+    logging.info(
+        "%s 回測資料完成：%s 根 K 線，約 %.1f 天",
+        symbol,
+        len(candles),
+        actual_days
+    )
+
+    return candles
 
 
 # -------------------- 技術指標 --------------------
