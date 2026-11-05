@@ -1,250 +1,732 @@
-import requests, time, datetime, os
+# ============================================================
+# Crypto Signal Bot
+# 六項加密貨幣分析與 Telegram 推播
+# 執行方式：python main.py（單次執行，適用 GitHub Actions）
+# ============================================================
 
-TOKEN = os.getenv("8754365158:AAEWuxaCPNmnf_cU-LJZEU0r8215AdEB1fo")
-CHAT_ID = os.getenv("7599785098")
+import os
+import sys
+import time
+import logging
+import statistics
+import datetime
+import xml.etree.ElementTree as ET
 
-SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT"]
+import requests
 
-last_signal = {s: None for s in SYMBOLS}
-entry_price = {}
-sl_tp = {}  # {symbol: {"sl":..., "tp":..., "be_moved":False}}
 
-loss_streak = 0
-pause_until = 0
+# -------------------- 基本設定 --------------------
 
-last_signal_time = time.time()
-stats = {"win":0, "loss":0, "total":0}
-performance = {"profit_pct":0}
-last_report_day = None
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# ===== Telegram =====
-def send(msg):
+BINANCE_URL = "https://api.binance.com"
+NEWS_RSS_URL = "https://www.coindesk.com/arc/outboundfeeds/rss/"
+
+SYMBOLS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "DOGEUSDT",
+    "LINKUSDT",
+]
+
+REQUEST_TIMEOUT = 20
+FEE_RATE = 0.001  # 回測單邊手續費假設 0.1%
+MAX_IDEAS = 5
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+
+
+# -------------------- Telegram --------------------
+
+def send_telegram(message):
+    """傳送 Telegram 訊息，並檢查 API 是否成功。"""
+
+    if not TOKEN or not CHAT_ID:
+        logging.error("缺少 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID")
+        return False
+
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
-        print("TG:", msg)
-    except Exception as e:
-        print("TG error:", e)
+        response = requests.post(
+            url,
+            data={
+                "chat_id": CHAT_ID,
+                "text": message,
+                "disable_web_page_preview": True,
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
 
-# ===== API =====
-def klines(symbol, interval):
+        response.raise_for_status()
+        result = response.json()
+
+        if not result.get("ok"):
+            logging.error("Telegram API 回傳失敗：%s", result)
+            return False
+
+        return True
+
+    except requests.RequestException as error:
+        logging.error("Telegram 傳送失敗：%s", error)
+        return False
+
+
+def send_long_message(message):
+    """避免單則 Telegram 訊息過長。"""
+
+    max_length = 3800
+
+    for start in range(0, len(message), max_length):
+        if not send_telegram(message[start:start + max_length]):
+            return False
+        time.sleep(0.3)
+
+    return True
+
+
+# -------------------- 市場資料 --------------------
+
+def get_klines(symbol, interval="1h", limit=500):
+    """取得 Binance K 線 OHLCV 資料。"""
+
+    url = f"{BINANCE_URL}/api/v3/klines"
+
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=100"
-        res = requests.get(url, timeout=5).json()
-        if not isinstance(res, list):
+        response = requests.get(
+            url,
+            params={
+                "symbol": symbol,
+                "interval": interval,
+                "limit": limit,
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+
+        response.raise_for_status()
+        raw = response.json()
+
+        if not isinstance(raw, list):
             return []
-        return [float(x[4]) for x in res if len(x) > 4]
-    except:
+
+        candles = []
+
+        for item in raw:
+            candles.append({
+                "time": item[0],
+                "open": float(item[1]),
+                "high": float(item[2]),
+                "low": float(item[3]),
+                "close": float(item[4]),
+                "volume": float(item[5]),
+            })
+
+        # 排除尚未收盤的最後一根 K 線
+        now_ms = int(time.time() * 1000)
+        candles = [
+            candle for candle in candles
+            if candle["time"] < now_ms
+        ]
+
+        return candles
+
+    except (requests.RequestException, ValueError, KeyError, TypeError) as error:
+        logging.warning("%s %s K線取得失敗：%s", symbol, interval, error)
         return []
 
-# ===== 指標 =====
-def ma(data,n): return sum(data[-n:])/n if len(data)>=n else None
 
-def ema(data,p):
-    if len(data)<p: return []
-    k=2/(p+1); e=data[0]; arr=[]
-    for d in data:
-        e=d*k+e*(1-k); arr.append(e)
-    return arr
+# -------------------- 技術指標 --------------------
 
-def macd(data):
-    e12=ema(data,12); e26=ema(data,26)
-    if not e12 or not e26: return [],[]
-    m=[a-b for a,b in zip(e12,e26)]
-    s=ema(m,9)
-    return m,s
+def sma(values, period):
+    if len(values) < period:
+        return None
+    return sum(values[-period:]) / period
 
-def rsi(data,p=14):
-    if len(data)<p+1: return None
-    g,l=[],[]
-    for i in range(1,len(data)):
-        d=data[i]-data[i-1]
-        g.append(max(d,0)); l.append(abs(min(d,0)))
-    ag=sum(g[-p:])/p; al=sum(l[-p:])/p
-    if al==0: return 100
-    rs=ag/al
-    return 100-(100/(1+rs))
 
-def atr(data,p=14):
-    if len(data)<p+1: return 0
-    tr=[abs(data[i]-data[i-1]) for i in range(1,len(data))]
-    return sum(tr[-p:])/p
+def ema_series(values, period):
+    if len(values) < period:
+        return []
 
-def boll(data,n=20):
-    if len(data)<n: return None,None
-    m=sum(data[-n:])/n
-    std=(sum([(x-m)**2 for x in data[-n:]])/n)**0.5
-    return m+2*std, m-2*std
+    multiplier = 2 / (period + 1)
+    result = [values[0]]
 
-def adx_sim(data,p=14):
-    if len(data)<p+1: return 0
-    changes=[abs(data[i]-data[i-1]) for i in range(1,len(data))]
-    return sum(changes[-p:])/p
+    for value in values[1:]:
+        result.append(
+            value * multiplier + result[-1] * (1 - multiplier)
+        )
 
-# ===== 主邏輯 =====
-def run():
-    global loss_streak, pause_until, last_signal_time, last_report_day
+    return result
 
-    print("Running:", datetime.datetime.utcnow())
 
-    if time.time() < pause_until:
-        print("Paused...")
-        return
+def calculate_rsi(values, period=14):
+    if len(values) < period + 1:
+        return None
 
-    status = []
+    changes = [
+        values[i] - values[i - 1]
+        for i in range(1, len(values))
+    ]
 
-    for s in SYMBOLS:
+    gains = [max(change, 0) for change in changes]
+    losses = [abs(min(change, 0)) for change in changes]
 
-        c1 = klines(s,"1h")
-        c4 = klines(s,"4h")
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
 
-        if len(c1)<30 or len(c4)<30:
-            status.append(f"{s} 資料不足")
+    if avg_loss == 0:
+        return 100.0
+
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def calculate_atr(candles, period=14):
+    if len(candles) < period + 1:
+        return None
+
+    true_ranges = []
+
+    for i in range(1, len(candles)):
+        current = candles[i]
+        previous = candles[i - 1]
+
+        tr = max(
+            current["high"] - current["low"],
+            abs(current["high"] - previous["close"]),
+            abs(current["low"] - previous["close"]),
+        )
+
+        true_ranges.append(tr)
+
+    return sum(true_ranges[-period:]) / period
+
+
+def calculate_macd(values):
+    fast = ema_series(values, 12)
+    slow = ema_series(values, 26)
+
+    if not fast or not slow:
+        return None, None
+
+    macd_values = [
+        fast_value - slow_value
+        for fast_value, slow_value in zip(fast, slow)
+    ]
+
+    signal_values = ema_series(macd_values, 9)
+
+    if not signal_values:
+        return None, None
+
+    return macd_values[-1], signal_values[-1]
+
+
+def calculate_support_resistance(candles, period=50):
+    recent = candles[-period:]
+
+    support = min(candle["low"] for candle in recent)
+    resistance = max(candle["high"] for candle in recent)
+
+    return support, resistance
+
+
+# -------------------- 市場技術分析 --------------------
+
+def analyze_market(symbol):
+    hourly = get_klines(symbol, "1h", 300)
+    daily = get_klines(symbol, "1d", 200)
+    weekly = get_klines(symbol, "1w", 100)
+
+    if min(len(hourly), len(daily), len(weekly)) < 30:
+        return None
+
+    prices = [candle["close"] for candle in hourly]
+    daily_prices = [candle["close"] for candle in daily]
+    weekly_prices = [candle["close"] for candle in weekly]
+
+    price = prices[-1]
+
+    ma8 = sma(prices, 8)
+    ma21 = sma(prices, 21)
+    ma55 = sma(prices, 55)
+
+    daily_ma20 = sma(daily_prices, 20)
+    weekly_ma20 = sma(weekly_prices, 20)
+
+    rsi = calculate_rsi(prices)
+    atr = calculate_atr(hourly)
+    macd, signal = calculate_macd(prices)
+
+    support, resistance = calculate_support_resistance(hourly)
+
+    if None in (
+        ma8, ma21, ma55, daily_ma20,
+        weekly_ma20, rsi, atr, macd, signal
+    ):
+        return None
+
+    hourly_trend = (
+        "偏多" if ma8 > ma21 > ma55
+        else "偏空" if ma8 < ma21 < ma55
+        else "震盪"
+    )
+
+    daily_trend = "偏多" if price > daily_ma20 else "偏空"
+    weekly_trend = (
+        "偏多" if weekly_prices[-1] > weekly_ma20
+        else "偏空"
+    )
+
+    if (
+        hourly_trend == "偏多"
+        and daily_trend == "偏多"
+        and weekly_trend == "偏多"
+        and rsi > 50
+        and macd > signal
+    ):
+        decision = "買進觀察"
+
+    elif (
+        hourly_trend == "偏空"
+        and daily_trend == "偏空"
+        and weekly_trend == "偏空"
+        and rsi < 50
+        and macd < signal
+    ):
+        decision = "賣出／避開做多"
+
+    else:
+        decision = "觀望"
+
+    return {
+        "symbol": symbol,
+        "price": price,
+        "hourly_trend": hourly_trend,
+        "daily_trend": daily_trend,
+        "weekly_trend": weekly_trend,
+        "rsi": rsi,
+        "macd": macd,
+        "signal": signal,
+        "atr": atr,
+        "support": support,
+        "resistance": resistance,
+        "decision": decision,
+        "candles": hourly,
+    }
+
+
+# -------------------- 交易點子產生器 --------------------
+
+def generate_trade_ideas(analyses):
+    ideas = []
+
+    for data in analyses:
+        if data is None:
             continue
 
-        price = c1[-1]
+        price = data["price"]
+        atr = data["atr"]
+        direction = None
 
-        ma8 = ma(c1,8); ma21 = ma(c1,21)
-        ma8_p = ma(c1[:-1],8); ma21_p = ma(c1[:-1],21)
-        if not ma8 or not ma21:
-            continue
-
-        r = rsi(c1)
-
-        m,sg = macd(c1)
-        if len(m)<2 or len(sg)<2:
-            continue
-
-        m0,m1 = m[-1],m[-2]
-        s0,s1 = sg[-1],sg[-2]
-
-        vol = atr(c1)
-        trend_up = ma(c4,8) > ma(c4,21)
-        trend_dn = ma(c4,8) < ma(c4,21)
-
-        upper, lower = boll(c1)
-        adx = adx_sim(c1)
-        if not upper:
-            continue
-
-        # ===== 過濾 =====
-        if vol/price < 0.003:
-            status.append(f"{s} 震盪")
-            continue
-        if adx < price*0.002:
-            status.append(f"{s} 無趨勢")
-            continue
-
-        # ===== 進場 =====
         if (
-            ma8_p < ma21_p and ma8 > ma21 and
-            m1 < s1 and m0 > s0 and
-            r and r > 55 and trend_up and
-            price < upper and
-            c1[-1] > c1[-2] > c1[-3]
+            data["hourly_trend"] == "偏多"
+            and data["daily_trend"] == "偏多"
+            and data["weekly_trend"] == "偏多"
+            and data["rsi"] >= 55
+            and data["macd"] > data["signal"]
         ):
-            if last_signal[s] != "long":
-                entry_price[s] = price
-                atr_val = atr(c1)
-                sl = price - atr_val*1.5
-                tp = price + atr_val*2.5
-                sl_tp[s] = {"sl":sl,"tp":tp,"be":False}
-                send(f"📈 {s} 做多\n進場:{price}\nSL:{round(sl,2)}")
-                last_signal[s] = "long"
-                last_signal_time = time.time()
-                status.append(f"{s} 做多")
+            direction = "LONG"
 
         elif (
-            ma8_p > ma21_p and ma8 < ma21 and
-            m1 > s1 and m0 < s0 and
-            r and r < 45 and trend_dn and
-            price > lower and
-            c1[-1] < c1[-2] < c1[-3]
+            data["hourly_trend"] == "偏空"
+            and data["daily_trend"] == "偏空"
+            and data["weekly_trend"] == "偏空"
+            and data["rsi"] <= 45
+            and data["macd"] < data["signal"]
         ):
-            if last_signal[s] != "short":
-                entry_price[s] = price
-                atr_val = atr(c1)
-                sl = price + atr_val*1.5
-                tp = price - atr_val*2.5
-                sl_tp[s] = {"sl":sl,"tp":tp,"be":False}
-                send(f"📉 {s} 做空\n進場:{price}\nSL:{round(sl,2)}")
-                last_signal[s] = "short"
-                last_signal_time = time.time()
-                status.append(f"{s} 做空")
+            direction = "SHORT"
 
-        # ===== 出場 =====
-        if s in entry_price:
-            ep = entry_price[s]
-            sl = sl_tp[s]["sl"]
-            tp = sl_tp[s]["tp"]
+        if direction is None or atr <= 0:
+            continue
 
-            # 移動停利（保本）
-            if not sl_tp[s]["be"]:
-                if last_signal[s]=="long" and price >= ep*1.015:
-                    sl_tp[s]["sl"] = ep
-                    sl_tp[s]["be"] = True
-                elif last_signal[s]=="short" and price <= ep*0.985:
-                    sl_tp[s]["sl"] = ep
-                    sl_tp[s]["be"] = True
+        if direction == "LONG":
+            entry = price
+            stop = price - atr * 1.5
+            target = price + atr * 2.5
+        else:
+            entry = price
+            stop = price + atr * 1.5
+            target = price - atr * 2.5
 
-            result = None
+        risk = abs(entry - stop)
+        reward = abs(target - entry)
 
-            if last_signal[s]=="long":
-                if price <= sl_tp[s]["sl"]:
-                    result="sl"
-                elif price >= tp:
-                    result="tp"
-            else:
-                if price >= sl_tp[s]["sl"]:
-                    result="sl"
-                elif price <= tp:
-                    result="tp"
+        if risk <= 0:
+            continue
 
-            if result:
-                change = (price-ep)/ep*100 if last_signal[s]=="long" else (ep-price)/ep*100
+        rr = reward / risk
 
-                stats["total"] += 1
-                performance["profit_pct"] += change
+        if rr < 1.5:
+            continue
 
-                if result=="tp":
-                    stats["win"] += 1
-                    loss_streak = 0
-                    send(f"🎯 {s} 停利 {round(change,2)}%")
-                else:
-                    stats["loss"] += 1
-                    loss_streak += 1
-                    send(f"❌ {s} 停損 {round(change,2)}%")
+        ideas.append({
+            "symbol": data["symbol"],
+            "direction": direction,
+            "entry": entry,
+            "stop": stop,
+            "target": target,
+            "rr": rr,
+            "rsi": data["rsi"],
+        })
 
-                del entry_price[s]
-                del sl_tp[s]
+    ideas.sort(key=lambda item: item["rr"], reverse=True)
 
-                if loss_streak >= 3:
-                    pause_until = time.time() + 12*3600
-                    send("⚠️ 連續虧損，暫停12小時")
+    return ideas[:MAX_IDEAS]
 
-        if s not in status:
-            status.append(f"{s} 無訊號")
 
-    # ===== 心跳 =====
-    send("🟡 系統狀態\n" + "\n".join(status))
+# -------------------- 策略回測 --------------------
 
-    # ===== 無訊號提醒 =====
-    if time.time() - last_signal_time > 7200:
-        send("⚠️ 超過2小時無訊號")
+def backtest_ema_cross(symbol):
+    """
+    簡單 EMA 8/21 交叉回測。
+    使用已收盤的 1H K 線。
+    手續費採單邊 0.1% 假設。
+    不包含滑價、資金費率及槓桿。
+    """
 
-    # ===== 每日報告 =====
-    today = datetime.datetime.utcnow().date()
-    if last_report_day != today and stats["total"] > 0:
-        winrate = stats["win"]/stats["total"]*100
-        send(f"📊 每日報告\n勝率:{round(winrate,2)}%\n交易:{stats['total']}\n損益:{round(performance['profit_pct'],2)}%")
-        last_report_day = today
+    candles = get_klines(symbol, "1h", 1000)
 
-# ===== 主迴圈 =====
+    if len(candles) < 100:
+        return None
+
+    prices = [candle["close"] for candle in candles]
+
+    fast = ema_series(prices, 8)
+    slow = ema_series(prices, 21)
+
+    if len(fast) != len(slow):
+        return None
+
+    trades = []
+    equity = 1.0
+    peak = 1.0
+    max_drawdown = 0.0
+    position = None
+
+    for i in range(22, len(prices)):
+        previous_fast = fast[i - 1]
+        previous_slow = slow[i - 1]
+        current_fast = fast[i]
+        current_slow = slow[i]
+
+        cross_up = (
+            previous_fast <= previous_slow
+            and current_fast > current_slow
+        )
+
+        cross_down = (
+            previous_fast >= previous_slow
+            and current_fast < current_slow
+        )
+
+        price = prices[i]
+
+        if position is None and cross_up:
+            position = price * (1 + FEE_RATE)
+
+        elif position is not None and cross_down:
+            exit_price = price * (1 - FEE_RATE)
+            trade_return = (exit_price / position) - 1
+
+            trades.append(trade_return)
+            equity *= (1 + trade_return)
+
+            peak = max(peak, equity)
+            drawdown = (peak - equity) / peak
+
+            max_drawdown = max(max_drawdown, drawdown)
+            position = None
+
+    if not trades:
+        return {
+            "trades": 0,
+            "win_rate": 0,
+            "profit_factor": None,
+            "max_drawdown": max_drawdown * 100,
+            "total_return": (equity - 1) * 100,
+        }
+
+    wins = [value for value in trades if value > 0]
+    losses = [value for value in trades if value < 0]
+
+    gross_profit = sum(wins)
+    gross_loss = abs(sum(losses))
+
+    profit_factor = (
+        gross_profit / gross_loss
+        if gross_loss > 0
+        else None
+    )
+
+    return {
+        "trades": len(trades),
+        "win_rate": len(wins) / len(trades) * 100,
+        "profit_factor": profit_factor,
+        "max_drawdown": max_drawdown * 100,
+        "total_return": (equity - 1) * 100,
+    }
+
+
+# -------------------- 新聞分析 --------------------
+
+def get_crypto_news():
+    """讀取公開 RSS 新聞標題，不將標題當成已驗證的交易訊號。"""
+
+    try:
+        response = requests.get(
+            NEWS_RSS_URL,
+            timeout=REQUEST_TIMEOUT,
+            headers={"User-Agent": "CryptoSignalBot/1.0"},
+        )
+
+        response.raise_for_status()
+
+        root = ET.fromstring(response.content)
+        items = root.findall(".//item")
+
+        news = []
+
+        for item in items[:8]:
+            title = item.findtext("title", default="").strip()
+            link = item.findtext("link", default="").strip()
+            pub_date = item.findtext("pubDate", default="").strip()
+
+            if title:
+                news.append({
+                    "title": title,
+                    "link": link,
+                    "date": pub_date,
+                })
+
+        return news
+
+    except (requests.RequestException, ET.ParseError, ValueError) as error:
+        logging.warning("新聞取得失敗：%s", error)
+        return []
+
+
+# -------------------- 六項分析報告 --------------------
+
+def build_report(analyses, ideas, backtests, news):
+    now = datetime.datetime.now(
+        datetime.timezone.utc
+    ).strftime("%Y-%m-%d %H:%M UTC")
+
+    report = [
+        "【Crypto Signal Bot 加密貨幣市場報告】",
+        f"資料時間：{now}",
+        "資料來源：Binance 公開市場 API、CoinDesk RSS",
+        "分析範圍：BTC、ETH、主要山寨幣",
+        "",
+    ]
+
+    # 1. 交易點子
+    report.append("【1. 交易點子產生器】")
+
+    if ideas:
+        for idea in ideas:
+            report.extend([
+                f"{idea['symbol']}｜{idea['direction']}",
+                f"參考進場：{idea['entry']:.6g}",
+                f"停損：{idea['stop']:.6g}",
+                f"目標：{idea['target']:.6g}",
+                f"風險報酬比：1:{idea['rr']:.2f}",
+                f"RSI：{idea['rsi']:.1f}",
+                "依據：多週期趨勢、RSI、MACD 同向條件",
+                "",
+            ])
+    else:
+        report.append("目前沒有符合設定條件的交易機會，不勉強產生訊號。\n")
+
+    # 2. 技術分析
+    report.append("【2. 自動化技術分析】")
+
+    for data in analyses:
+        if data is None:
+            continue
+
+        report.extend([
+            f"{data['symbol']}｜價格：{data['price']:.6g}",
+            (
+                f"1H：{data['hourly_trend']}｜"
+                f"日線：{data['daily_trend']}｜"
+                f"週線：{data['weekly_trend']}"
+            ),
+            f"RSI：{data['rsi']:.1f}",
+            f"支撐參考：{data['support']:.6g}",
+            f"壓力參考：{data['resistance']:.6g}",
+            f"判斷：{data['decision']}",
+            "",
+        ])
+
+    # 3. 新聞
+    report.append("【3. 新聞轉交易策略】")
+
+    if news:
+        report.append(
+            "以下為新聞標題整理；尚未完成事件影響及市場反應驗證："
+        )
+
+        for item in news:
+            report.append(f"- {item['title']}")
+            if item["link"]:
+                report.append(item["link"])
+    else:
+        report.append("目前無法取得新聞資料，暫不提供新聞交易判斷。")
+
+    report.extend([
+        "",
+        "新聞策略限制：未完成全文及市場反應分析前，不視為交易訊號。",
+        "",
+    ])
+
+    # 4. 回測
+    report.append("【4. 策略回測】")
+    report.append("策略：1H EMA 8/21 交叉；僅統計已完成的平倉交易。")
+    report.append("假設：單邊手續費 0.1%，不含滑價、資金費率及槓桿。")
+
+    for symbol, result in backtests.items():
+        if result is None:
+            report.append(f"{symbol}：歷史資料不足，無法回測。")
+            continue
+
+        pf = (
+            f"{result['profit_factor']:.2f}"
+            if result["profit_factor"] is not None
+            else "無法計算"
+        )
+
+        report.extend([
+            f"{symbol}：",
+            f"交易次數：{result['trades']}",
+            f"勝率：{result['win_rate']:.2f}%",
+            f"Profit Factor：{pf}",
+            f"最大回撤：{result['max_drawdown']:.2f}%",
+            f"累積報酬：{result['total_return']:.2f}%",
+            "",
+        ])
+
+    report.append(
+        "注意：此為簡化歷史測試，不代表未來績效；"
+        "尚未納入完整風險模型及所有實際交易成本。"
+    )
+    report.append("")
+
+    # 5. 投資組合風險
+    report.append("【5. 投資組合風險管理】")
+    report.append(
+        "尚未連接交易所帳戶或持倉資料。"
+        "目前無法計算集中度、相關性、實際曝險或下跌 20% 情境。"
+    )
+    report.append(
+        "請勿將本報告視為已檢查個人持倉；"
+        "後續需提供持倉幣種、數量、成本及合約方向。"
+    )
+    report.append("")
+
+    # 6. 交易日誌
+    report.append("【6. 交易日誌分析師】")
+    report.append(
+        "尚未連接交易紀錄，因此無法分析最近 20 筆交易、"
+        "重複錯誤或個人決策偏誤。"
+    )
+    report.append(
+        "後續需建立可持續保存的交易日誌，"
+        "包含進出場時間、方向、價格、數量、手續費及結果。"
+    )
+    report.append("")
+
+    report.extend([
+        "【風險聲明】",
+        "本報告為市場資料分析與策略研究，不保證獲利，",
+        "不構成投資建議。交易前請自行確認價格、流動性及風險。",
+    ])
+
+    return "\n".join(report)
+
+
+# -------------------- 主程式 --------------------
+
+def main():
+    if not TOKEN or not CHAT_ID:
+        logging.error(
+            "環境變數未設定：TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID"
+        )
+        return 1
+
+    logging.info("開始執行加密貨幣分析")
+
+    analyses = []
+
+    for symbol in SYMBOLS:
+        logging.info("分析 %s", symbol)
+
+        data = analyze_market(symbol)
+        analyses.append(data)
+
+        time.sleep(0.2)
+
+    valid_analyses = [
+        data for data in analyses
+        if data is not None
+    ]
+
+    if not valid_analyses:
+        logging.error("所有幣種均無有效行情資料")
+        send_telegram(
+            "【Crypto Signal Bot】\n"
+            "本次分析失敗：無法取得足夠市場資料。\n"
+            "請檢查 Binance API 或網路連線。"
+        )
+        return 1
+
+    logging.info("產生交易點子")
+    ideas = generate_trade_ideas(valid_analyses)
+
+    logging.info("執行策略回測")
+    backtests = {}
+
+    for symbol in SYMBOLS:
+        backtests[symbol] = backtest_ema_cross(symbol)
+        time.sleep(0.2)
+
+    logging.info("取得新聞")
+    news = get_crypto_news()
+
+    report = build_report(
+        valid_analyses,
+        ideas,
+        backtests,
+        news,
+    )
+
+    logging.info("傳送 Telegram 報告")
+
+    if not send_long_message(report):
+        logging.error("報告傳送失敗")
+        return 1
+
+    logging.info("本次分析完成")
+    return 0
+
+
 if __name__ == "__main__":
-    while True:
-        try:
-            run()
-            time.sleep(300)  # 5分鐘檢查（避免漏停損）
-        except Exception as e:
-            send(f"❌ 系統錯誤: {str(e)}")
-            time.sleep(60)
+    sys.exit(main())
