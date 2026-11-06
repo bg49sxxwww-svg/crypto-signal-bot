@@ -12,7 +12,7 @@ FIELDS = ("time", "open", "high", "low", "close", "volume")
 def save_candles(path, candles):
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    rows = sorted(list(candles), key=lambda item: int(item["time"]))
+    rows = list(candles)
     if rows:
         report = validate_hourly_candles(rows, rows[0]["time"], rows[-1]["time"] + HOUR_MS)
         if not report["complete"]:
