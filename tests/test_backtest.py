@@ -133,6 +133,12 @@ class BacktestRegressionTests(unittest.TestCase):
         self.assertEqual(len(trade_log), 1)
         self.assertEqual(trade_log[0]["strategy"], "D")  # D forced-exit attribution
         self.assertEqual(trade_log[0]["exit_reason"], "FORCED_END")
+        self.assertAlmostEqual(
+            result["max_close_drawdown"], result["max_drawdown"]
+        )
+        self.assertGreater(
+            result["max_intrabar_drawdown"], result["max_close_drawdown"]
+        )
 
 
 if __name__ == "__main__":
