@@ -88,6 +88,7 @@ def fetch_okx_1h_history(
     session=None,
     sleep_fn: Callable[[float], None] = time.sleep,
     max_pages: int = 20_000,
+    max_retries: int = 4,
 ) -> tuple[list[dict], dict]:
     """Fetch closed OKX spot 1H candles in [start_ms, end_ms), paging backward.
 
@@ -110,19 +111,39 @@ def fetch_okx_1h_history(
         params = {"instId": inst_id, "bar": "1H", "limit": str(PAGE_LIMIT)}
         if cursor is not None:
             params["after"] = str(cursor)
-        try:
-            response = client.get(
-                OKX_HISTORY_URL, params=params, timeout=REQUEST_TIMEOUT
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except (requests.RequestException, ValueError) as exc:
-            raise HistoryLoadError(f"{symbol} history request failed: {exc}") from exc
+        payload = None
+        for attempt in range(max_retries + 1):
+            try:
+                response = client.get(
+                    OKX_HISTORY_URL, params=params, timeout=REQUEST_TIMEOUT
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if payload.get("code") == "0":
+                    break
+                if str(payload.get("code")) != "50011":
+                    raise HistoryLoadError(
+                        f"{symbol} OKX error {payload.get('code')}: {payload.get('msg')}"
+                    )
+                retry_error = f"OKX rate limit: {payload.get('msg')}"
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if status not in (429, 500, 502, 503, 504):
+                    raise HistoryLoadError(f"{symbol} history HTTP error: {exc}") from exc
+                retry_error = str(exc)
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                retry_error = str(exc)
+            except ValueError as exc:
+                retry_error = f"invalid JSON response: {exc}"
 
-        if payload.get("code") != "0":
-            raise HistoryLoadError(
-                f"{symbol} OKX error {payload.get('code')}: {payload.get('msg')}"
-            )
+            if attempt >= max_retries:
+                raise HistoryLoadError(
+                    f"{symbol} history request exhausted retries: {retry_error}"
+                )
+            sleep_fn(0.5 * (2 ** attempt))
+
+        if payload is None or payload.get("code") != "0":
+            raise HistoryLoadError(f"{symbol} history request failed after retries")
         raw = payload.get("data") or []
         if not raw:
             break
