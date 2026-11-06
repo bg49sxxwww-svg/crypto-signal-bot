@@ -131,7 +131,7 @@ class BacktestRegressionTests(unittest.TestCase):
         self.assertFalse(result["insufficient_data"])
         self.assertTrue(result["forced_exit_at_end"])
         self.assertEqual(len(trade_log), 1)
-        self.assertEqual(trade_log[0]["strategy"], "D")
+        self.assertEqual(trade_log[0]["strategy"], "D")  # D forced-exit attribution
         self.assertEqual(trade_log[0]["exit_reason"], "FORCED_END")
 
 
