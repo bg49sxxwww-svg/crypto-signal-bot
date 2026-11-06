@@ -6,6 +6,12 @@ on:
     paths:
       - "scripts/run_historical_backtest.py"
       - ".github/workflows/okx-historical-backtest.yml"
+  pull_request:
+    branches: [ "fix/d-forced-exit-log" ]
+    paths:
+      - "experiments/d_tp4_backtest.py"
+      - "scripts/run_historical_backtest.py"
+      - ".github/workflows/okx-historical-backtest.yml"
   workflow_dispatch:
 
 permissions:
