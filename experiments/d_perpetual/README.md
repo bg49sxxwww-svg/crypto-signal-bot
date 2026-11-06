@@ -73,3 +73,15 @@ Therefore:
 - Risk budget reference: 0.5% per trade; 3% daily stop threshold (configurable, not an order instruction)
 - Existing Strategy D ATR exits: preserve unchanged for the first comparison
 - Live trading: disabled
+
+## Implemented P2 reference-price loaders
+
+The branch now includes `experiments/d_perpetual/reference_price_loader.py`:
+- Mark price: `GET /api/v5/market/history-mark-price-candles`, using the derivative SWAP instrument ID.
+- Index price: `GET /api/v5/market/history-index-candles`, using an explicitly supplied index instrument ID (for example, `BTC-USD` where that is the correct OKX index ID).
+- Both loaders use independent pagination, closed-candle filtering (`confirm=1`), retry handling, duplicate/gap/order/range checks, and separate coverage reports.
+- Index IDs are deliberately not inferred from SWAP IDs; the caller must supply the verified index instrument identifier.
+
+P2 acceptance tests cover mark/index endpoint routing, paging, unclosed bars, overlapping pages, pagination stalls, retry behavior, invalid OHLC, and timestamp integrity.
+
+Important: matching timestamps do not establish equivalent prices. The mark-price series, index-price series, and traded SWAP series remain separate datasets. Before a backtest can use them together, compare their timestamp coverage and explicitly define which price series controls entries, stops, and liquidation checks.
