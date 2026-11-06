@@ -1250,6 +1250,8 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
         "win_rate": 0.0,
         "profit_factor": None,
         "max_drawdown": 0.0,
+        "max_close_drawdown": 0.0,
+        "max_intrabar_drawdown": 0.0,
         "total_return": 0.0,
         "bars": len(candles),
         "period_days": 0.0,
@@ -1708,7 +1710,11 @@ def build_report(analyses, ideas, backtests, news, trade_log=None):
                 f"交易次數：{result['trades']}",
                 f"勝率：{result['win_rate']:.2f}%",
                 f"Profit Factor：{pf}",
-                f"最大回撤：{result['max_drawdown']:.2f}%",
+                f"收盤價基準最大回撤：{result['max_drawdown']:.2f}%",
+                *(
+                    [f"盤中估算最大回撤：{result['max_intrabar_drawdown']:.2f}%"]
+                    if "max_intrabar_drawdown" in result else []
+                ),
                 f"累積報酬：{result['total_return']:.2f}%",
                 (
                     "低樣本警示：交易次數少於設定門檻"
