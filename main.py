@@ -847,9 +847,22 @@ def backtest_ema_cross(symbol, candles=None, trade_log=None):
                 else low_price <= position["target"]
             )
 
+            # 反向交叉必須在前一根已收盤 K 線形成，於本根開盤執行。
+            # 多單：EMA 快線由上往下穿越慢線；空單：EMA 快線由下往上穿越慢線。
+            reverse_cross = (
+                fast[i - 2] >= slow[i - 2] and fast[i - 1] < slow[i - 1]
+                if side == "LONG"
+                else fast[i - 2] <= slow[i - 2] and fast[i - 1] > slow[i - 1]
+            )
+
             exit_reference = None
             exit_reason = None
-            if stop_hit:
+
+            # 已確認反向訊號時，先按本根開盤出場，不再使用本根後續高低點。
+            if reverse_cross:
+                exit_reference = open_price
+                exit_reason = "REVERSE_CROSS"
+            elif stop_hit:
                 exit_reference = (
                     min(open_price, position["stop"])
                     if side == "LONG"
@@ -859,17 +872,6 @@ def backtest_ema_cross(symbol, candles=None, trade_log=None):
             elif target_hit:
                 exit_reference = position["target"]
                 exit_reason = "TAKE_PROFIT"
-
-            # 反向 EMA 交叉於本根開盤出場，避免等到收盤才假設成交。
-            reverse_cross = (
-                fast[i - 1] < slow[i - 1]
-                if side == "LONG"
-                else fast[i - 1] > slow[i - 1]
-            )
-
-            if exit_reference is None and reverse_cross:
-                exit_reference = open_price
-                exit_reason = "REVERSE_CROSS"
 
             if exit_reference is not None:
                 if side == "LONG":
@@ -1069,9 +1071,22 @@ def backtest_ema_triple(symbol, candles=None, trade_log=None):
                 else low_price <= position["target"]
             )
 
+            # 反向交叉必須在前一根已收盤 K 線形成，於本根開盤執行。
+            # 多單：EMA 快線由上往下穿越慢線；空單：EMA 快線由下往上穿越慢線。
+            reverse_cross = (
+                fast[i - 2] >= slow[i - 2] and fast[i - 1] < slow[i - 1]
+                if side == "LONG"
+                else fast[i - 2] <= slow[i - 2] and fast[i - 1] > slow[i - 1]
+            )
+
             exit_reference = None
             exit_reason = None
-            if stop_hit:
+
+            # 已確認反向訊號時，先按本根開盤出場，不再使用本根後續高低點。
+            if reverse_cross:
+                exit_reference = open_price
+                exit_reason = "REVERSE_CROSS"
+            elif stop_hit:
                 exit_reference = (
                     min(open_price, position["stop"])
                     if side == "LONG"
@@ -1081,17 +1096,6 @@ def backtest_ema_triple(symbol, candles=None, trade_log=None):
             elif target_hit:
                 exit_reference = position["target"]
                 exit_reason = "TAKE_PROFIT"
-
-            # 反向 EMA 交叉於本根開盤出場，避免等到收盤才假設成交。
-            reverse_cross = (
-                fast[i - 1] < slow[i - 1]
-                if side == "LONG"
-                else fast[i - 1] > slow[i - 1]
-            )
-
-            if exit_reference is None and reverse_cross:
-                exit_reference = open_price
-                exit_reason = "REVERSE_CROSS"
 
             if exit_reference is not None:
                 if side == "LONG":
