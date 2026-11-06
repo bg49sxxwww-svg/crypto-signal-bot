@@ -2,7 +2,7 @@ name: Backtest Regression Tests
 
 on:
   push:
-    branches: [ "fix/p0-backtest-main" ]
+    branches: [ "fix/p0-backtest-main", "fix/d-forced-exit-log" ]
   pull_request:
     branches: [ "fix/p0-backtest-main" ]
   workflow_dispatch:
