@@ -45,5 +45,5 @@ jobs:
         with:
           name: crypto-trade-log
           path: trade_log.csv
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
