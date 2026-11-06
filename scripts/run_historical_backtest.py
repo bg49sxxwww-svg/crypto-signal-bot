@@ -13,19 +13,13 @@ from pathlib import Path
 
 import main
 
-DAYS = 90
+DAYS = 180
 SYMBOLS = list(main.SYMBOLS)
 STRATEGIES = {
-    "A": main.backtest_ema_cross_baseline,
-    "B": main.backtest_ema_cross,
-    "C": main.backtest_ema_triple,
     "D": main.backtest_ema_filtered,
 }
 LABELS = {
-    "A": "EMA 8/21 baseline",
-    "B": "EMA 8/21 + 4H EMA 8/21 + RSI",
-    "C": "EMA 20/60 + 4H EMA 20/60/200",
-    "D": "C + RSI bands LONG 55-68 / SHORT 32-45",
+    "D": "1H EMA 20/60 + completed 4H EMA 20/60/200 + RSI bands LONG 55-68 / SHORT 32-45",
 }
 OUT = Path("historical_backtest_results")
 HOUR_MS = 60 * 60 * 1000
