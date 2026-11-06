@@ -1,6 +1,11 @@
 # Changelog
 
 ## 2026-11-06
+- Added an isolated TP1-TP4 partial-exit engine for D strategy experiments, with configurable ATR targets and 40/30/20/10 allocation defaults.
+- Added regression tests for long/short target geometry, partial exits, stop-first same-bar handling, full closure, and invalid allocation validation.
+- This is an experimental execution primitive only; strategy D and its production behavior remain unchanged. Historical integration and performance validation are pending.
+
+## 2026-11-06
 - Clarified Telegram trade ideas as candidate entry plans, with explicit LONG/SHORT labels and percentage distances to stop-loss and take-profit; added regression coverage for both directions.
 
 ## 2026-11-06
