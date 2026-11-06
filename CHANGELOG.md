@@ -1,6 +1,9 @@
 # Changelog
 
 ## 2026-11-06
+- Extended the isolated OKX historical backtest to 180 days and narrowed the run to strategy D only, retaining all eight symbols and the existing data/cost validation.
+
+## 2026-11-06
 - Added an isolated 90-day OKX spot historical comparison runner for strategies A/B/C/D, with candle coverage validation and JSON/CSV/Markdown outputs.
 - Added a dedicated GitHub Actions workflow to run regression tests before the historical comparison and upload the resulting evidence.
 - Added D strategy: 1H EMA 20/60 crossover with completed 4H EMA 20/60/200 trend filter.
