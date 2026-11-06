@@ -1475,7 +1475,7 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
             if not target_only_exit:
                 intrabar_peak = max(intrabar_peak, favorable_equity)
 
-        intrabar_peak = max(intrabar_peak, equity, intrabar_marked_equity)
+        intrabar_peak = max(intrabar_peak, intrabar_marked_equity)
         intrabar_drawdown = (
             (intrabar_peak - intrabar_marked_equity) / intrabar_peak
             if intrabar_peak > 0 else 0.0
@@ -1483,6 +1483,8 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
         max_intrabar_drawdown = max(
             max_intrabar_drawdown, intrabar_drawdown
         )
+        # 本根 K 線的已實現權益只可成為下一根 K 線的峰值，避免時間順序倒置。
+        intrabar_peak = max(intrabar_peak, equity)
 
     if position is not None:
         final_close = candles[-1]["close"]
