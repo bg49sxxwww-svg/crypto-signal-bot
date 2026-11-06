@@ -2,7 +2,7 @@ name: OKX Historical Backtest
 
 on:
   push:
-    branches: [ "fix/p0-backtest-main" ]
+    branches: [ "fix/p0-backtest-main", "experiment/d-tp4-backtest" ]
     paths:
       - "scripts/run_historical_backtest.py"
       - ".github/workflows/okx-historical-backtest.yml"
