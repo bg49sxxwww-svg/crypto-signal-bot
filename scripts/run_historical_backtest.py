@@ -168,9 +168,9 @@ def main_run():
         f"- Costs: fee {main.FEE_RATE * 100:.3f}% + slippage {main.SLIPPAGE_RATE * 100:.3f}% per side",
         "- Leverage and funding fees: excluded",
         "- Execution: signal on closed 1H candle, entry at next 1H open; conservative stop-first when stop and target are both touched",
-        "- D_TP4 preserves D entry rules and SL 1.5 ATR; targets are 2.5/3.5/4.5/5.5 ATR at 40/30/20/10 allocation
-        "- D_TP4 fills only the nearest remaining target per OHLC bar; stop has priority on same-bar stop/target touches
-        "- Entry and exit fee/slippage are applied; no breakeven or trailing stop is introduced
+        "- D_TP4 preserves D entry rules and SL 1.5 ATR; targets are 2.5/3.5/4.5/5.5 ATR at 40/30/20/10 allocation",
+        "- D_TP4 fills only the nearest remaining target per OHLC bar; stop has priority on same-bar stop/target touches",
+        "- Entry and exit fee/slippage are applied; no breakeven or trailing stop is introduced",
         "- This is a historical simulation, not a live result or a guarantee of future performance",
         "",
         "## Data coverage",
@@ -208,7 +208,7 @@ def main_run():
         "- OKX spot candles are used as a consistent price series; perpetual swap basis, funding, liquidation and contract-specific fees are not modeled.",
         "- The 4H EMA200 strategies require at least 200 completed 4H bars before signals can qualify; their effective signal history is shorter than the full displayed period.",
         "- Missing hourly intervals are reported; incomplete 4H buckets are excluded by the existing aggregation function.",
-        "- Results are compounded trade returns; position sizing, portfolio-level capital allocation and concurrent-symbol exposure are not modeled.
+        "- Results are compounded trade returns; position sizing, portfolio-level capital allocation and concurrent-symbol exposure are not modeled.",
         "- D_TP4 entry-signal count is reported for parity checking; partial exits are aggregated into one completed trade result.",
         "",
         f"## Data fetch failures: {len(failures)}",
