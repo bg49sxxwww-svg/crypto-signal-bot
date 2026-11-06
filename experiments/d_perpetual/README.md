@@ -20,7 +20,7 @@ Status: research-only design stage. No orders, credentials, account access, or l
 | Index candles | `GET /api/v5/market/history-index-candles` | Index reference series |
 | Funding history | `GET /api/v5/public/funding-rate-history` | Funding cash flows while positions are open |
 | Instrument specs | `GET /api/v5/public/instruments?instType=SWAP` | Contract value, multiplier, lot size, tick size, minimum size and state |
-| Position tiers | `GET /api/v5/public/position-tiers` | Maintenance-margin and liquidation assumptions |
+| Position limits (PM only) | `GET /api/v5/account/position-tiers` | Portfolio-margin cross-position limitation; not a universal maintenance-margin tier table |
 
 All endpoints must be independently paginated, timestamp-normalized, validated, cached, and accompanied by coverage metadata. Do not assume that one endpoint's retention window applies to another.
 
@@ -85,3 +85,18 @@ The branch now includes `experiments/d_perpetual/reference_price_loader.py`:
 P2 acceptance tests cover mark/index endpoint routing, paging, unclosed bars, overlapping pages, pagination stalls, retry behavior, invalid OHLC, and timestamp integrity.
 
 Important: matching timestamps do not establish equivalent prices. The mark-price series, index-price series, and traded SWAP series remain separate datasets. Before a backtest can use them together, compare their timestamp coverage and explicitly define which price series controls entries, stops, and liquidation checks.
+
+
+## Implemented P3 instrument specification loader
+
+The branch now includes `experiments/d_perpetual/instrument_specs.py`:
+- Uses the unauthenticated `GET /api/v5/public/instruments?instType=SWAP&instId=...` endpoint.
+- Requires the returned instrument ID and type to match exactly.
+- By default, accepts only live, USDT-settled linear SWAP contracts.
+- Parses `ctVal`, `ctMult`, `lotSz`, `minSz`, and `tickSz` as Python `Decimal`; never converts contract sizing fields to binary floats.
+- Fails closed on missing/invalid contract values, wrong settlement currency, inverse contracts, inactive state, API errors, or ambiguous/missing instrument records.
+- This is a read-only metadata fetch. It does not set leverage, read account state, place orders, or calculate liquidation prices.
+
+Important correction to the original research plan: OKX documents `GET /api/v5/account/position-tiers` as a Portfolio Margin (PM) cross-position limitation endpoint. It is authenticated and returns an instrument-family maximum position limit; it is not a general public maintenance-margin tier schedule. Do not use it as a generic isolated-margin liquidation-tier source. The P3 instrument loader therefore does not consume that endpoint. Maintenance-margin and liquidation modeling remains blocked until the correct account-mode-specific rules and data source are independently verified.
+
+P3 tests cover exact instrument matching, SWAP type, USDT settlement, linear contract type, live state, required Decimal fields, malformed/non-finite values, endpoint parameters, and API errors.
