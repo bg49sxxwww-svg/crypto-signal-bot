@@ -1,6 +1,9 @@
 # Changelog
 
 ## 2026-11-06
+- Clarified Telegram trade ideas as candidate entry plans, with explicit LONG/SHORT labels and percentage distances to stop-loss and take-profit; added regression coverage for both directions.
+
+## 2026-11-06
 - Extended the isolated OKX historical backtest to 180 days and narrowed the run to strategy D only, retaining all eight symbols and the existing data/cost validation.
 
 ## 2026-11-06
