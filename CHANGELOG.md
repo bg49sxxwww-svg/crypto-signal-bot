@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-11-06
+- Added an isolated 90-day OKX spot historical comparison runner for strategies A/B/C/D, with candle coverage validation and JSON/CSV/Markdown outputs.
+- Added a dedicated GitHub Actions workflow to run regression tests before the historical comparison and upload the resulting evidence.
 - Added D strategy: 1H EMA 20/60 crossover with completed 4H EMA 20/60/200 trend filter.
 - Added D strategy RSI entry bands: LONG 55–68; SHORT 32–45.
 - Kept A/B/C strategies unchanged.
