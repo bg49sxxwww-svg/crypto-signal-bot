@@ -24,3 +24,5 @@ jobs:
           pip install -r requirements.txt pytest
       - name: Run regression suite
         run: PYTHONPATH=. pytest -q
+      - name: Verify live public OKX history endpoint (read-only)
+        run: PYTHONPATH=. python experiments/d_entry_quality/live_api_smoke.py
