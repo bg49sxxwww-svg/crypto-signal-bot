@@ -99,6 +99,27 @@ class BacktestRegressionTests(unittest.TestCase):
         self.assertIn("A 組僅以反向 EMA 交叉出場", report)
         self.assertIn("B／C／D 組使用 ATR(14)", report)
 
+    def test_trade_idea_report_labels_direction_and_risk_distances(self):
+        ideas = [
+            {
+                "symbol": "ETHUSDT", "direction": "LONG",
+                "entry": 100.0, "stop": 97.0, "target": 105.0,
+                "rr": 1.67, "rsi": 60.0,
+            },
+            {
+                "symbol": "BTCUSDT", "direction": "SHORT",
+                "entry": 200.0, "stop": 206.0, "target": 190.0,
+                "rr": 1.67, "rsi": 40.0,
+            },
+        ]
+        report = main.build_report([], ideas, {}, [], trade_log=[])
+        self.assertIn("做多 LONG（BUY）", report)
+        self.assertIn("做空 SHORT（SELL）", report)
+        self.assertIn("候選訊號／等待進場；不代表已成交", report)
+        self.assertIn("停損 SL：97（距進場 3.00%）", report)
+        self.assertIn("止盈 TP1：105（距進場 5.00%）", report)
+        self.assertIn("止盈 TP2–TP4：未設定", report)
+
     def test_d_intrabar_drawdown_handles_target_only_exit(self):
         from unittest.mock import patch
 
