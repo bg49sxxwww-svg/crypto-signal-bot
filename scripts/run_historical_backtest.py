@@ -154,7 +154,8 @@ def main_run():
             writer.writeheader()
             writer.writerows(all_summary)
     if all_trades:
-        fields = list(all_trades[0])
+        # D and D-TP4 emit different trade fields; preserve the union for CSV rows.
+        fields = list(dict.fromkeys(key for row in all_trades for key in row))
         with (OUT / "trades.csv").open("w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
             writer.writeheader()
