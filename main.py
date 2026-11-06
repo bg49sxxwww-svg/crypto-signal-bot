@@ -1426,7 +1426,7 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
             final_return = position["entry"] / final_exit - 1
 
         trades.append(final_return)
-        record_closed_trade(trade_log, "C", symbol, position, candles[-1]["time"], final_exit, "FORCED_END", final_return)
+        record_closed_trade(trade_log, "D", symbol, position, candles[-1]["time"], final_exit, "FORCED_END", final_return)
         equity *= max(0.0, 1 + final_return)
         position = None
         forced_exit_at_end = True
