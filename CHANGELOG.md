@@ -17,3 +17,4 @@
 ## 2026-11-06
 - Fixed D strategy end-of-backtest forced-exit records being mislabeled as strategy C; added a targeted regression test to keep D trade logs correctly attributed.
 - Added separate close-based and conservative OHLC intrabar maximum drawdown metrics for strategy D; retained `max_drawdown` as the close-based compatibility field and exposed both values in reports.
+- Refined D intrabar drawdown ordering so current-bar realized equity only becomes a peak for subsequent bars; added coverage for a target-only exit after an adverse intrabar move.
