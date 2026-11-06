@@ -147,7 +147,7 @@ def fetch_okx_1h_history(
                 candles_by_time[ts] = candle
 
         pages += 1
-        if oldest < start_ms:
+        if oldest <= start_ms:
             break
         cursor = oldest
         sleep_fn(MIN_PAGE_INTERVAL_SECONDS)
