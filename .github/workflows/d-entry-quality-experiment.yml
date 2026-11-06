@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "experiment/d-entry-quality-framework" ]
   pull_request:
-    branches: [ "experiment/d-entry-quality-framework" ]
+    branches: [ "experiment/d-tp4-backtest" ]
   workflow_dispatch:
 
 permissions:
