@@ -58,6 +58,40 @@ class BacktestRegressionTests(unittest.TestCase):
             self.assertTrue(result["insufficient_data"])
             self.assertEqual(result["trades"], 0)
 
+    def test_all_four_backtests_execute_on_synthetic_90_day_history(self):
+        import math
+
+        candles = []
+        hour = 60 * 60 * 1000
+        previous_close = 100.0
+        for index in range(2160):
+            close = 100 + 0.025 * index + 4 * math.sin(index / 18)
+            open_price = previous_close
+            candles.append({
+                "time": index * hour,
+                "open": open_price,
+                "high": max(open_price, close) + 0.8,
+                "low": min(open_price, close) - 0.8,
+                "close": close,
+                "volume": 1000 + index % 17,
+            })
+            previous_close = close
+
+        strategies = (
+            main.backtest_ema_cross_baseline,
+            main.backtest_ema_cross,
+            main.backtest_ema_triple,
+            main.backtest_ema_filtered,
+        )
+        for strategy in strategies:
+            result = strategy("BTCUSDT", candles=candles)
+            self.assertFalse(result["insufficient_data"], strategy.__name__)
+            self.assertEqual(result["bars"], 2160)
+            self.assertGreaterEqual(result["trades"], 0)
+            self.assertTrue(math.isfinite(result["total_return"]))
+            self.assertTrue(math.isfinite(result["max_drawdown"]))
+            self.assertFalse(result["open_position"])
+
     def test_report_describes_baseline_costs_and_all_four_groups(self):
         report = main.build_report([], [], {}, [], trade_log=[])
         self.assertIn("A 組基準", report)
