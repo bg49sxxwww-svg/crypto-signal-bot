@@ -531,7 +531,7 @@ def generate_trade_ideas(analyses):
             data["hourly_trend"] == "偏空"
             and data["daily_trend"] == "偏空"
             and data["weekly_trend"] == "偏空"
-            and data["rsi"] <= 45
+            and 35 <= data["rsi"] <= 45
             and data["macd"] < data["signal"]
         ):
             direction = "SHORT"
@@ -1092,7 +1092,12 @@ def build_report(analyses, ideas, backtests, news, trade_log=None):
                 f"目標：{idea['target']:.6g}",
                 f"風險報酬比：1:{idea['rr']:.2f}",
                 f"RSI：{idea['rsi']:.1f}",
-                "依據：多週期趨勢、RSI、MACD 同向條件",
+                (
+                    "依據：多週期趨勢、RSI、MACD 同向條件；"
+                    "SHORT RSI 限定 35–45，避免極度超賣追空"
+                    if idea["direction"] == "SHORT"
+                    else "依據：多週期趨勢、RSI、MACD 同向條件"
+                ),
                 "",
             ])
     else:
