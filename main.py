@@ -1630,19 +1630,27 @@ def build_report(analyses, ideas, backtests, news, trade_log=None):
 
     if ideas:
         for idea in ideas:
+            direction_label = (
+                "做多 LONG（BUY）"
+                if idea["direction"] == "LONG"
+                else "做空 SHORT（SELL）"
+            )
             report.extend([
-                f"{idea['symbol']}｜{idea['direction']}",
-                f"參考進場：{idea['entry']:.6g}",
-                f"停損：{idea['stop']:.6g}",
-                f"目標：{idea['target']:.6g}",
+                f"【{idea['symbol']}｜{direction_label}】",
+                "訊號狀態：等待進場條件確認（不是已成交通知）",
+                f"進場參考價：{idea['entry']:.6g}",
+                f"停損 SL：{idea['stop']:.6g}",
+                f"止盈 TP1：{idea['target']:.6g}",
+                "止盈 TP2–TP4：尚未設定（目前策略只有單一 ATR 目標）",
                 f"風險報酬比：1:{idea['rr']:.2f}",
                 f"RSI：{idea['rsi']:.1f}",
                 (
-                    "依據：多週期趨勢、RSI、MACD 同向條件；"
+                    "訊號依據：多週期趨勢、RSI、MACD 同向條件；"
                     "SHORT RSI 限定 35–45，避免極度超賣追空"
                     if idea["direction"] == "SHORT"
-                    else "依據：多週期趨勢、RSI、MACD 同向條件"
+                    else "訊號依據：多週期趨勢、RSI、MACD 同向條件"
                 ),
+                "執行提醒：價格偏離進場參考價或訊號失效時，不追價。",
                 "",
             ])
     else:
