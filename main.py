@@ -1622,7 +1622,7 @@ def build_report(analyses, ideas, backtests, news, trade_log=None):
     report.append("【4. 策略回測】")
     report.append("A 組基準：1H EMA 8/21 交叉，無 ATR 固定停損／停利；B 組 P1：1H EMA 8/21 + 已完成 4H EMA 8/21 趨勢 + RSI(14) + ATR 停損／停利；C 組：1H EMA 20/60 + 已完成 4H EMA 20/60/200 + RSI(14) + ATR 停損／停利；D 組：沿用 C 組架構，另限制做多 RSI 55–68、做空 RSI 32–45。")
     report.append("B／C／D 組使用 ATR(14) 停損 1.5 倍／停利 2.5 倍；A 組僅以反向 EMA 交叉出場。C／D 組的 EMA200 為 4H EMA200，不是日線 EMA200。")
-    report.append("兩組策略均於回測結束時強制平倉；同根 K 線同時觸及停損與停利時，保守採停損先成交。")
+    report.append("四組策略均於回測結束時強制平倉；B／C／D 同根 K 線同時觸及停損與停利時，保守採停損先成交。")
     report.append("假設：單邊手續費 0.1%、滑價 0.05%；不含資金費率及槓桿。")
 
     for symbol, pair in backtests.items():
