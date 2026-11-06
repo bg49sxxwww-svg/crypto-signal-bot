@@ -1635,13 +1635,19 @@ def build_report(analyses, ideas, backtests, news, trade_log=None):
                 if idea["direction"] == "LONG"
                 else "做空 SHORT（SELL）"
             )
+            entry = float(idea["entry"])
+            stop = float(idea["stop"])
+            target = float(idea["target"])
+            risk_pct = abs(entry - stop) / entry * 100 if entry > 0 else 0.0
+            reward_pct = abs(target - entry) / entry * 100 if entry > 0 else 0.0
+
             report.extend([
                 f"【{idea['symbol']}｜{direction_label}】",
-                "訊號狀態：等待進場條件確認（不是已成交通知）",
-                f"進場參考價：{idea['entry']:.6g}",
-                f"停損 SL：{idea['stop']:.6g}",
-                f"止盈 TP1：{idea['target']:.6g}",
-                "止盈 TP2–TP4：尚未設定（目前策略只有單一 ATR 目標）",
+                "訊號狀態：候選訊號／等待進場；不代表已成交",
+                f"進場參考價：{entry:.6g}",
+                f"停損 SL：{stop:.6g}（距進場 {risk_pct:.2f}%）",
+                f"止盈 TP1：{target:.6g}（距進場 {reward_pct:.2f}%）",
+                "止盈 TP2–TP4：未設定；目前策略採單一 ATR 止盈目標",
                 f"風險報酬比：1:{idea['rr']:.2f}",
                 f"RSI：{idea['rsi']:.1f}",
                 (
