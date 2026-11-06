@@ -695,42 +695,7 @@ def backtest_ema_cross_baseline(symbol, candles=None, trade_log=None):
         drawdown = (peak - marked_equity) / peak if peak > 0 else 0.0
         max_drawdown = max(max_drawdown, drawdown)
 
-        # 盤中保守估值：多單使用本根最低價、空單使用本根最高價。
-        # 若開盤反向交叉，按開盤出場；若停損觸發，使用實際停損參考價（含跳空）。
-        intrabar_marked_equity = equity
-        if position_at_bar_start is not None:
-            if reverse_cross:
-                adverse_reference = open_price
-            elif stop_hit:
-                adverse_reference = (
-                    min(open_price, position_at_bar_start["stop"])
-                    if position_at_bar_start["side"] == "LONG"
-                    else max(open_price, position_at_bar_start["stop"])
-                )
-            elif position_at_bar_start["side"] == "LONG":
-                adverse_reference = low_price
-            else:
-                adverse_reference = high_price
 
-            if position_at_bar_start["side"] == "LONG":
-                adverse_exit = adverse_reference * (1 - cost)
-                intrabar_marked_equity = equity * (
-                    adverse_exit / position_at_bar_start["entry"]
-                )
-            else:
-                adverse_exit = adverse_reference * (1 + cost)
-                intrabar_marked_equity = equity * (
-                    position_at_bar_start["entry"] / adverse_exit
-                )
-
-        intrabar_peak = max(intrabar_peak, intrabar_marked_equity)
-        intrabar_drawdown = (
-            (intrabar_peak - intrabar_marked_equity) / intrabar_peak
-            if intrabar_peak > 0 else 0.0
-        )
-        max_intrabar_drawdown = max(
-            max_intrabar_drawdown, intrabar_drawdown
-        )
 
     if position is not None:
         final_close = candles[-1]["close"]
@@ -1334,6 +1299,7 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
     for i in range(60, len(candles)):
         candle = candles[i]
         position_at_bar_start = position
+        equity_at_bar_start = equity
         open_price = candle["open"]
         high_price = candle["high"]
         low_price = candle["low"]
@@ -1442,7 +1408,7 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
                             "target": next_open - atr * 2.5,
                         }
 
-        # 以收盤價估算未實現權益，納入最大回撤監控。
+        # 收盤價基準回撤：保留既有 max_drawdown 欄位語意。
         marked_equity = equity
         # 新倉位在下一根 K 線開盤成交，不可用進場前一根收盤價標記。
         if position is not None and position is position_at_bar_start:
@@ -1456,6 +1422,55 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
         peak = max(peak, marked_equity)
         drawdown = (peak - marked_equity) / peak if peak > 0 else 0.0
         max_drawdown = max(max_drawdown, drawdown)
+
+        # 盤中保守估值：假設有利極值先於不利極值，避免低估同根 K 線內的回撤。
+        intrabar_marked_equity = equity
+        if position_at_bar_start is not None:
+            side = position_at_bar_start["side"]
+            if reverse_cross:
+                favorable_reference = open_price
+                adverse_reference = open_price
+            elif side == "LONG":
+                favorable_reference = high_price
+                adverse_reference = (
+                    min(open_price, position_at_bar_start["stop"])
+                    if stop_hit else low_price
+                )
+            else:
+                favorable_reference = low_price
+                adverse_reference = (
+                    max(open_price, position_at_bar_start["stop"])
+                    if stop_hit else high_price
+                )
+
+            if side == "LONG":
+                favorable_exit = favorable_reference * (1 - cost)
+                adverse_exit = adverse_reference * (1 - cost)
+                favorable_equity = equity_at_bar_start * (
+                    favorable_exit / position_at_bar_start["entry"]
+                )
+                intrabar_marked_equity = equity_at_bar_start * (
+                    adverse_exit / position_at_bar_start["entry"]
+                )
+            else:
+                favorable_exit = favorable_reference * (1 + cost)
+                adverse_exit = adverse_reference * (1 + cost)
+                favorable_equity = equity_at_bar_start * (
+                    position_at_bar_start["entry"] / favorable_exit
+                )
+                intrabar_marked_equity = equity_at_bar_start * (
+                    position_at_bar_start["entry"] / adverse_exit
+                )
+            intrabar_peak = max(intrabar_peak, favorable_equity)
+
+        intrabar_peak = max(intrabar_peak, equity, intrabar_marked_equity)
+        intrabar_drawdown = (
+            (intrabar_peak - intrabar_marked_equity) / intrabar_peak
+            if intrabar_peak > 0 else 0.0
+        )
+        max_intrabar_drawdown = max(
+            max_intrabar_drawdown, intrabar_drawdown
+        )
 
     if position is not None:
         final_close = candles[-1]["close"]
