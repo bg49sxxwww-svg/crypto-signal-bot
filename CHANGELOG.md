@@ -1,6 +1,19 @@
 # Changelog
 
 ## 2026-11-06
+- Corrected regression workflow pull-request base filters so PR #2 receives CI checks.
+- Added a separate D-TP4 backtest using unchanged D entry rules and the original 1.5 ATR stop.
+- Kept the original D single target (2.5 ATR) as TP1; added experimental TP2-TP4 at 3.5/4.5/5.5 ATR with 40/30/20/10 allocations.
+- Included entry and exit fee/slippage, reverse EMA exit, stop-gap handling, and forced end-of-test exit.
+- Applied a conservative OHLC rule: only the nearest remaining target fills per bar; stop takes priority on same-bar stop/target touches.
+- Added 180-day, eight-symbol D versus D-TP4 historical comparison; no production D behavior or live execution is changed.
+
+## 2026-11-06
+- Added an isolated TP1-TP4 partial-exit engine for D strategy experiments, with configurable ATR targets and 40/30/20/10 allocation defaults.
+- Added regression tests for long/short target geometry, partial exits, stop-first same-bar handling, full closure, and invalid allocation validation.
+- This is an experimental execution primitive only; strategy D and its production behavior remain unchanged. Historical integration and performance validation are pending.
+
+## 2026-11-06
 - Clarified Telegram trade ideas as candidate entry plans, with explicit LONG/SHORT labels and percentage distances to stop-loss and take-profit; added regression coverage for both directions.
 
 ## 2026-11-06

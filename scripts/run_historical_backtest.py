@@ -12,14 +12,17 @@ import sys
 from pathlib import Path
 
 import main
+from experiments.d_tp4_backtest import run_d_tp4_backtest
 
 DAYS = 180
 SYMBOLS = list(main.SYMBOLS)
 STRATEGIES = {
     "D": main.backtest_ema_filtered,
+    "D_TP4": run_d_tp4_backtest,
 }
 LABELS = {
-    "D": "1H EMA 20/60 + completed 4H EMA 20/60/200 + RSI bands LONG 55-68 / SHORT 32-45",
+    "D": "D baseline: original single TP 2.5 ATR; SL 1.5 ATR",
+    "D_TP4": "D-TP4: TP 2.5/3.5/4.5/5.5 ATR; allocation 40/30/20/10; SL 1.5 ATR",
 }
 OUT = Path("historical_backtest_results")
 HOUR_MS = 60 * 60 * 1000
@@ -127,6 +130,7 @@ def main_run():
                     "total_return_pct": round(result["total_return"], 4),
                     "low_sample": result["low_sample"],
                     "forced_exit_at_end": result["forced_exit_at_end"],
+                    "entry_signals": result.get("entry_signals"),
                     "fee_rate_one_way_pct": main.FEE_RATE * 100,
                     "slippage_one_way_pct": main.SLIPPAGE_RATE * 100,
                 })
@@ -150,7 +154,8 @@ def main_run():
             writer.writeheader()
             writer.writerows(all_summary)
     if all_trades:
-        fields = list(all_trades[0])
+        # D and D-TP4 emit different trade fields; preserve the union for CSV rows.
+        fields = list(dict.fromkeys(key for row in all_trades for key in row))
         with (OUT / "trades.csv").open("w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
             writer.writeheader()
@@ -164,6 +169,9 @@ def main_run():
         f"- Costs: fee {main.FEE_RATE * 100:.3f}% + slippage {main.SLIPPAGE_RATE * 100:.3f}% per side",
         "- Leverage and funding fees: excluded",
         "- Execution: signal on closed 1H candle, entry at next 1H open; conservative stop-first when stop and target are both touched",
+        "- D_TP4 preserves D entry rules and SL 1.5 ATR; targets are 2.5/3.5/4.5/5.5 ATR at 40/30/20/10 allocation",
+        "- D_TP4 fills only the nearest remaining target per OHLC bar; stop has priority on same-bar stop/target touches",
+        "- Entry and exit fee/slippage are applied; no breakeven or trailing stop is introduced",
         "- This is a historical simulation, not a live result or a guarantee of future performance",
         "",
         "## Data coverage",
@@ -201,7 +209,8 @@ def main_run():
         "- OKX spot candles are used as a consistent price series; perpetual swap basis, funding, liquidation and contract-specific fees are not modeled.",
         "- The 4H EMA200 strategies require at least 200 completed 4H bars before signals can qualify; their effective signal history is shorter than the full displayed period.",
         "- Missing hourly intervals are reported; incomplete 4H buckets are excluded by the existing aggregation function.",
-        "- Results are compounded trade returns from the existing strategy engine; position sizing, portfolio-level capital allocation and concurrent-symbol exposure are not modeled.",
+        "- Results are compounded trade returns; position sizing, portfolio-level capital allocation and concurrent-symbol exposure are not modeled.",
+        "- D_TP4 entry-signal count is reported for parity checking; partial exits are aggregated into one completed trade result.",
         "",
         f"## Data fetch failures: {len(failures)}",
     ])
