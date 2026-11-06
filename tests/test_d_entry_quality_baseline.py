@@ -32,8 +32,13 @@ class EntryQualityBaselineTests(unittest.TestCase):
         base = self.synthetic_candles(8)
         valid = main.build_4h_candles(base)
         self.assertEqual(len(valid), 2)
+
+        # The incomplete first 4H bucket is dropped; the complete second
+        # bucket must remain available.
         missing = [row for row in base if row["time"] != 2 * hour]
-        self.assertEqual(main.build_4h_candles(missing), [])
+        self.assertEqual(main.build_4h_candles(missing), [valid[1]])
+
+        # A duplicated timestamp invalidates only its own 4H bucket.
         duplicate = base[:4] + [dict(base[2])] + base[4:]
         self.assertEqual(main.build_4h_candles(duplicate), [valid[1]])
 
