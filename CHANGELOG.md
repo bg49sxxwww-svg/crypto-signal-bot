@@ -13,3 +13,6 @@
 - Added synthetic 90-day four-strategy end-to-end regression coverage.
 - Added regression tests for indicator output, complete 4H aggregation, D RSI boundaries, insufficient-history handling, and report descriptions.
 - Added GitHub Actions workflow to run tests and upload text/SVG evidence.
+
+## 2026-11-06
+- Fixed D strategy end-of-backtest forced-exit records being mislabeled as strategy C; added a targeted regression test to keep D trade logs correctly attributed.
