@@ -167,10 +167,9 @@ def run_d_tp4_backtest(symbol, candles, trade_log=None,
         nonlocal equity, position
         for event in events:
             position["trade_events"].append(event)
-            if event["fraction"] > 0:
-                equity *= max(0.0, 1.0 + event["return_contribution"])
             if event["reason"] in ("STOP_LOSS", "REVERSE_CROSS", "FORCED_END") or position["closed"]:
                 closed_returns.append(position["realized_return"])
+                equity *= max(0.0, 1.0 + position["realized_return"])
                 if trade_log is not None:
                     trade_log.append({
                         "strategy": "D_TP4", "symbol": symbol,
@@ -236,7 +235,11 @@ def run_d_tp4_backtest(symbol, candles, trade_log=None,
                 mark / position["entry_fill"] - 1 if position["side"] == "LONG"
                 else position["entry_fill"] / mark - 1
             )
-            marked = equity * max(0.0, 1.0 + unrealized * position["remaining_fraction"])
+            marked = equity * max(
+                0.0,
+                1.0 + position["realized_return"]
+                + unrealized * position["remaining_fraction"],
+            )
         peak = max(peak, marked)
         max_drawdown = max(max_drawdown, (peak - marked) / peak if peak > 0 else 0.0)
 
