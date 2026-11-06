@@ -99,6 +99,102 @@ class BacktestRegressionTests(unittest.TestCase):
         self.assertIn("A 組僅以反向 EMA 交叉出場", report)
         self.assertIn("B／C／D 組使用 ATR(14)", report)
 
+    def test_trade_idea_report_labels_direction_and_risk_distances(self):
+        ideas = [
+            {
+                "symbol": "ETHUSDT", "direction": "LONG",
+                "entry": 100.0, "stop": 97.0, "target": 105.0,
+                "rr": 1.67, "rsi": 60.0,
+            },
+            {
+                "symbol": "BTCUSDT", "direction": "SHORT",
+                "entry": 200.0, "stop": 206.0, "target": 190.0,
+                "rr": 1.67, "rsi": 40.0,
+            },
+        ]
+        report = main.build_report([], ideas, {}, [], trade_log=[])
+        self.assertIn("做多 LONG（BUY）", report)
+        self.assertIn("做空 SHORT（SELL）", report)
+        self.assertIn("候選訊號／等待進場；不代表已成交", report)
+        self.assertIn("停損 SL：97（距進場 3.00%）", report)
+        self.assertIn("止盈 TP1：105（距進場 5.00%）", report)
+        self.assertIn("止盈 TP2–TP4：未設定", report)
+
+    def test_d_intrabar_drawdown_handles_target_only_exit(self):
+        from unittest.mock import patch
+
+        hour = 60 * 60 * 1000
+        candles = [
+            {"time": i * hour, "open": 100.0, "high": 100.5,
+             "low": 99.5, "close": 100.0, "volume": 1}
+            for i in range(1000)
+        ]
+        # The final bar reaches the long target after a substantial adverse move.
+        candles[-1].update({"high": 103.0, "low": 99.0, "close": 101.0})
+
+        fast_1h = [0.0] * 1000
+        slow_1h = [1.0] * 1000
+        fast_1h[998] = 2.0
+        fast_4h = [2.0] * 250
+        slow_4h = [1.0] * 250
+        long_4h = [0.0] * 250
+
+        with patch.object(
+            main, "ema_series",
+            side_effect=[fast_1h, slow_1h, fast_4h, slow_4h, long_4h],
+        ), patch.object(main, "calculate_atr", return_value=1.0), patch.object(
+            main, "calculate_rsi", return_value=60.0
+        ), patch.object(main, "d_rsi_filter", return_value=True):
+            result = main.backtest_ema_filtered("BTCUSDT", candles=candles)
+
+        self.assertFalse(result["insufficient_data"])
+        self.assertFalse(result["forced_exit_at_end"])
+        self.assertGreater(result["max_intrabar_drawdown"], 0.0)
+        self.assertAlmostEqual(
+            result["max_close_drawdown"], result["max_drawdown"]
+        )
+
+    def test_d_forced_exit_is_logged_under_d_strategy(self):
+        from unittest.mock import patch
+
+        hour = 60 * 60 * 1000
+        candles = [
+            {"time": i * hour, "open": 100.0, "high": 100.5,
+             "low": 99.5, "close": 100.0, "volume": 1}
+            for i in range(1000)
+        ]
+
+        fast_1h = [0.0] * 1000
+        slow_1h = [1.0] * 1000
+        fast_1h[998] = 2.0
+
+        fast_4h = [2.0] * 250
+        slow_4h = [1.0] * 250
+        long_4h = [0.0] * 250
+
+        trade_log = []
+        with patch.object(
+            main, "ema_series",
+            side_effect=[fast_1h, slow_1h, fast_4h, slow_4h, long_4h],
+        ), patch.object(main, "calculate_atr", return_value=1.0), patch.object(
+            main, "calculate_rsi", return_value=60.0
+        ), patch.object(main, "d_rsi_filter", return_value=True):
+            result = main.backtest_ema_filtered(
+                "BTCUSDT", candles=candles, trade_log=trade_log
+            )
+
+        self.assertFalse(result["insufficient_data"])
+        self.assertTrue(result["forced_exit_at_end"])
+        self.assertEqual(len(trade_log), 1)
+        self.assertEqual(trade_log[0]["strategy"], "D")  # D forced-exit attribution
+        self.assertEqual(trade_log[0]["exit_reason"], "FORCED_END")
+        self.assertAlmostEqual(
+            result["max_close_drawdown"], result["max_drawdown"]
+        )
+        self.assertGreater(
+            result["max_intrabar_drawdown"], result["max_close_drawdown"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

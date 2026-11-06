@@ -695,6 +695,8 @@ def backtest_ema_cross_baseline(symbol, candles=None, trade_log=None):
         drawdown = (peak - marked_equity) / peak if peak > 0 else 0.0
         max_drawdown = max(max_drawdown, drawdown)
 
+
+
     if position is not None:
         final_close = candles[-1]["close"]
         if position["side"] == "LONG":
@@ -782,6 +784,8 @@ def backtest_ema_cross(symbol, candles=None, trade_log=None):
         "win_rate": 0.0,
         "profit_factor": None,
         "max_drawdown": 0.0,
+        "max_close_drawdown": 0.0,
+        "max_intrabar_drawdown": 0.0,
         "total_return": 0.0,
         "bars": len(candles),
         "period_days": 0.0,
@@ -930,7 +934,7 @@ def backtest_ema_cross(symbol, candles=None, trade_log=None):
                             "target": next_open - atr * 2.5,
                         }
 
-        # 以收盤價估算未實現權益，納入最大回撤監控。
+        # 收盤價基準回撤：保留既有 max_drawdown 欄位語意。
         marked_equity = equity
         # 新倉位在下一根 K 線開盤成交，不可用進場前一根收盤價標記。
         if position is not None and position is position_at_bar_start:
@@ -1185,7 +1189,7 @@ def backtest_ema_triple(symbol, candles=None, trade_log=None):
             final_return = position["entry"] / final_exit - 1
 
         trades.append(final_return)
-        record_closed_trade(trade_log, "C", symbol, position, candles[-1]["time"], final_exit, "FORCED_END", final_return)
+        record_closed_trade(trade_log, "D", symbol, position, candles[-1]["time"], final_exit, "FORCED_END", final_return)
         equity *= max(0.0, 1 + final_return)
         position = None
         forced_exit_at_end = True
@@ -1246,6 +1250,8 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
         "win_rate": 0.0,
         "profit_factor": None,
         "max_drawdown": 0.0,
+        "max_close_drawdown": 0.0,
+        "max_intrabar_drawdown": 0.0,
         "total_return": 0.0,
         "bars": len(candles),
         "period_days": 0.0,
@@ -1286,6 +1292,8 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
     equity = 1.0
     peak = 1.0
     max_drawdown = 0.0
+    intrabar_peak = 1.0
+    max_intrabar_drawdown = 0.0
     position = None
     forced_exit_at_end = False
     cost = FEE_RATE + SLIPPAGE_RATE
@@ -1293,6 +1301,7 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
     for i in range(60, len(candles)):
         candle = candles[i]
         position_at_bar_start = position
+        equity_at_bar_start = equity
         open_price = candle["open"]
         high_price = candle["high"]
         low_price = candle["low"]
@@ -1401,7 +1410,7 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
                             "target": next_open - atr * 2.5,
                         }
 
-        # 以收盤價估算未實現權益，納入最大回撤監控。
+        # 收盤價基準回撤：保留既有 max_drawdown 欄位語意。
         marked_equity = equity
         # 新倉位在下一根 K 線開盤成交，不可用進場前一根收盤價標記。
         if position is not None and position is position_at_bar_start:
@@ -1416,6 +1425,67 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
         drawdown = (peak - marked_equity) / peak if peak > 0 else 0.0
         max_drawdown = max(max_drawdown, drawdown)
 
+        # 盤中保守估值：假設有利極值先於不利極值，避免低估同根 K 線內的回撤。
+        intrabar_marked_equity = equity
+        if position_at_bar_start is not None:
+            side = position_at_bar_start["side"]
+            target_only_exit = target_hit and not stop_hit and not reverse_cross
+            if reverse_cross:
+                favorable_reference = open_price
+                adverse_reference = open_price
+            elif side == "LONG":
+                # 若本根只觸及停利，保守假設低點先於停利價；到達停利後不再計入後續波動。
+                favorable_reference = position_at_bar_start["target"]
+                adverse_reference = low_price
+                if stop_hit:
+                    favorable_reference = high_price
+                    adverse_reference = min(
+                        open_price, position_at_bar_start["stop"]
+                    )
+            else:
+                # 空單方向相反：只觸及停利時，保守假設高點先於停利價。
+                favorable_reference = position_at_bar_start["target"]
+                adverse_reference = high_price
+                if stop_hit:
+                    favorable_reference = low_price
+                    adverse_reference = max(
+                        open_price, position_at_bar_start["stop"]
+                    )
+
+            if side == "LONG":
+                favorable_exit = favorable_reference * (1 - cost)
+                adverse_exit = adverse_reference * (1 - cost)
+                favorable_equity = equity_at_bar_start * (
+                    favorable_exit / position_at_bar_start["entry"]
+                )
+                intrabar_marked_equity = equity_at_bar_start * (
+                    adverse_exit / position_at_bar_start["entry"]
+                )
+            else:
+                favorable_exit = favorable_reference * (1 + cost)
+                adverse_exit = adverse_reference * (1 + cost)
+                favorable_equity = equity_at_bar_start * (
+                    position_at_bar_start["entry"] / favorable_exit
+                )
+                intrabar_marked_equity = equity_at_bar_start * (
+                    position_at_bar_start["entry"] / adverse_exit
+                )
+            # 單獨觸及停利時，先記錄不利極值，再記錄停利出場後的已實現權益；
+            # 不把停利出場後的同根 K 線價格變動算進持倉回撤。
+            if not target_only_exit:
+                intrabar_peak = max(intrabar_peak, favorable_equity)
+
+        intrabar_peak = max(intrabar_peak, intrabar_marked_equity)
+        intrabar_drawdown = (
+            (intrabar_peak - intrabar_marked_equity) / intrabar_peak
+            if intrabar_peak > 0 else 0.0
+        )
+        max_intrabar_drawdown = max(
+            max_intrabar_drawdown, intrabar_drawdown
+        )
+        # 本根 K 線的已實現權益只可成為下一根 K 線的峰值，避免時間順序倒置。
+        intrabar_peak = max(intrabar_peak, equity)
+
     if position is not None:
         final_close = candles[-1]["close"]
         if position["side"] == "LONG":
@@ -1426,7 +1496,7 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
             final_return = position["entry"] / final_exit - 1
 
         trades.append(final_return)
-        record_closed_trade(trade_log, "C", symbol, position, candles[-1]["time"], final_exit, "FORCED_END", final_return)
+        record_closed_trade(trade_log, "D", symbol, position, candles[-1]["time"], final_exit, "FORCED_END", final_return)
         equity *= max(0.0, 1 + final_return)
         position = None
         forced_exit_at_end = True
@@ -1448,6 +1518,8 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
         "win_rate": len(wins) / len(trades) * 100 if trades else 0.0,
         "profit_factor": profit_factor,
         "max_drawdown": max_drawdown * 100,
+        "max_close_drawdown": max_drawdown * 100,
+        "max_intrabar_drawdown": max_intrabar_drawdown * 100,
         "total_return": (equity - 1) * 100,
         "bars": len(candles),
         "period_days": period_days,
@@ -1558,19 +1630,33 @@ def build_report(analyses, ideas, backtests, news, trade_log=None):
 
     if ideas:
         for idea in ideas:
+            direction_label = (
+                "做多 LONG（BUY）"
+                if idea["direction"] == "LONG"
+                else "做空 SHORT（SELL）"
+            )
+            entry = float(idea["entry"])
+            stop = float(idea["stop"])
+            target = float(idea["target"])
+            risk_pct = abs(entry - stop) / entry * 100 if entry > 0 else 0.0
+            reward_pct = abs(target - entry) / entry * 100 if entry > 0 else 0.0
+
             report.extend([
-                f"{idea['symbol']}｜{idea['direction']}",
-                f"參考進場：{idea['entry']:.6g}",
-                f"停損：{idea['stop']:.6g}",
-                f"目標：{idea['target']:.6g}",
+                f"【{idea['symbol']}｜{direction_label}】",
+                "訊號狀態：候選訊號／等待進場；不代表已成交",
+                f"進場參考價：{entry:.6g}",
+                f"停損 SL：{stop:.6g}（距進場 {risk_pct:.2f}%）",
+                f"止盈 TP1：{target:.6g}（距進場 {reward_pct:.2f}%）",
+                "止盈 TP2–TP4：未設定；目前策略採單一 ATR 止盈目標",
                 f"風險報酬比：1:{idea['rr']:.2f}",
                 f"RSI：{idea['rsi']:.1f}",
                 (
-                    "依據：多週期趨勢、RSI、MACD 同向條件；"
+                    "訊號依據：多週期趨勢、RSI、MACD 同向條件；"
                     "SHORT RSI 限定 35–45，避免極度超賣追空"
                     if idea["direction"] == "SHORT"
-                    else "依據：多週期趨勢、RSI、MACD 同向條件"
+                    else "訊號依據：多週期趨勢、RSI、MACD 同向條件"
                 ),
+                "執行提醒：價格偏離進場參考價或訊號失效時，不追價。",
                 "",
             ])
     else:
@@ -1650,7 +1736,11 @@ def build_report(analyses, ideas, backtests, news, trade_log=None):
                 f"交易次數：{result['trades']}",
                 f"勝率：{result['win_rate']:.2f}%",
                 f"Profit Factor：{pf}",
-                f"最大回撤：{result['max_drawdown']:.2f}%",
+                f"收盤價基準最大回撤：{result['max_drawdown']:.2f}%",
+                *(
+                    [f"盤中估算最大回撤：{result['max_intrabar_drawdown']:.2f}%"]
+                    if "max_intrabar_drawdown" in result else []
+                ),
                 f"累積報酬：{result['total_return']:.2f}%",
                 (
                     "低樣本警示：交易次數少於設定門檻"
