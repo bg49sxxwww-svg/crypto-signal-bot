@@ -1429,21 +1429,28 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
         intrabar_marked_equity = equity
         if position_at_bar_start is not None:
             side = position_at_bar_start["side"]
+            target_only_exit = target_hit and not stop_hit and not reverse_cross
             if reverse_cross:
                 favorable_reference = open_price
                 adverse_reference = open_price
             elif side == "LONG":
-                favorable_reference = high_price
-                adverse_reference = (
-                    min(open_price, position_at_bar_start["stop"])
-                    if stop_hit else low_price
-                )
+                # 若本根只觸及停利，保守假設低點先於停利價；到達停利後不再計入後續波動。
+                favorable_reference = position_at_bar_start["target"]
+                adverse_reference = low_price
+                if stop_hit:
+                    favorable_reference = high_price
+                    adverse_reference = min(
+                        open_price, position_at_bar_start["stop"]
+                    )
             else:
-                favorable_reference = low_price
-                adverse_reference = (
-                    max(open_price, position_at_bar_start["stop"])
-                    if stop_hit else high_price
-                )
+                # 空單方向相反：只觸及停利時，保守假設高點先於停利價。
+                favorable_reference = position_at_bar_start["target"]
+                adverse_reference = high_price
+                if stop_hit:
+                    favorable_reference = low_price
+                    adverse_reference = max(
+                        open_price, position_at_bar_start["stop"]
+                    )
 
             if side == "LONG":
                 favorable_exit = favorable_reference * (1 - cost)
@@ -1463,7 +1470,10 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
                 intrabar_marked_equity = equity_at_bar_start * (
                     position_at_bar_start["entry"] / adverse_exit
                 )
-            intrabar_peak = max(intrabar_peak, favorable_equity)
+            # 單獨觸及停利時，先記錄不利極值，再記錄停利出場後的已實現權益；
+            # 不把停利出場後的同根 K 線價格變動算進持倉回撤。
+            if not target_only_exit:
+                intrabar_peak = max(intrabar_peak, favorable_equity)
 
         intrabar_peak = max(intrabar_peak, equity, intrabar_marked_equity)
         intrabar_drawdown = (
