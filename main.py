@@ -1023,9 +1023,51 @@ def get_crypto_news():
         return []
 
 
+def summarize_recent_trades(trade_log, strategy="P1", limit=20):
+    """只分析指定策略的已平倉回測紀錄，按出場時間取最近 N 筆。"""
+    rows = [
+        row for row in (trade_log or [])
+        if str(row.get("strategy", "")).upper() == strategy.upper()
+    ]
+    rows.sort(key=lambda row: row.get("exit_time_utc", ""))
+
+    recent = rows[-limit:]
+    returns = []
+    for row in recent:
+        try:
+            returns.append(float(row.get("return_pct", 0.0)))
+        except (TypeError, ValueError):
+            continue
+
+    wins = [value for value in returns if value > 0]
+    losses = [value for value in returns if value < 0]
+    gross_profit = sum(wins)
+    gross_loss = abs(sum(losses))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
+
+    reasons = {}
+    for row in recent:
+        reason = row.get("exit_reason", "UNKNOWN") or "UNKNOWN"
+        reasons[reason] = reasons.get(reason, 0) + 1
+
+    return {
+        "available": bool(recent),
+        "total_records": len(rows),
+        "sample_size": len(returns),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": len(wins) / len(returns) * 100 if returns else 0.0,
+        "profit_factor": profit_factor,
+        "average_return": sum(returns) / len(returns) if returns else 0.0,
+        "reasons": reasons,
+        "first_exit_time": recent[0].get("exit_time_utc", "") if recent else "",
+        "last_exit_time": recent[-1].get("exit_time_utc", "") if recent else "",
+    }
+
+
 # -------------------- 六項分析報告 --------------------
 
-def build_report(analyses, ideas, backtests, news):
+def build_report(analyses, ideas, backtests, news, trade_log=None):
     now = datetime.datetime.now(
         datetime.timezone.utc
     ).strftime("%Y-%m-%d %H:%M UTC")
@@ -1162,16 +1204,33 @@ def build_report(analyses, ideas, backtests, news):
     )
     report.append("")
 
-    # 6. 交易日誌
+    # 6. 交易日誌：本次回測紀錄，不代表交易所實際成交
     report.append("【6. 交易日誌分析師】")
-    report.append(
-        "尚未連接交易紀錄，因此無法分析最近 20 筆交易、"
-        "重複錯誤或個人決策偏誤。"
-    )
-    report.append(
-        "後續需建立可持續保存的交易日誌，"
-        "包含進出場時間、方向、價格、數量、手續費及結果。"
-    )
+    summary = summarize_recent_trades(trade_log, strategy="P1", limit=20)
+
+    if summary["available"]:
+        pf = (
+            f"{summary['profit_factor']:.2f}"
+            if summary["profit_factor"] is not None
+            else "無法計算"
+        )
+        report.extend([
+            "資料類型：P1 歷史回測已平倉紀錄，非個人實盤成交。",
+            f"P1 累計紀錄：{summary['total_records']} 筆",
+            f"最近樣本：{summary['sample_size']} 筆",
+            f"區間：{summary['first_exit_time']} 至 {summary['last_exit_time']}",
+            f"勝率：{summary['win_rate']:.2f}%",
+            f"Profit Factor：{pf}",
+            f"平均單筆報酬：{summary['average_return']:.3f}%",
+            f"獲利／虧損筆數：{summary['wins']}／{summary['losses']}",
+            "最近樣本出場原因：" + "、".join(
+                f"{reason} {count}筆"
+                for reason, count in sorted(summary["reasons"].items())
+            ),
+            "限制：此摘要只反映策略回測，不代表使用者個人交易行為。",
+        ])
+    else:
+        report.append("本次沒有可讀取的 P1 已平倉交易紀錄，無法分析最近 20 筆。")
     report.append("")
 
     report.extend([
@@ -1250,6 +1309,7 @@ def main():
         ideas,
         backtests,
         news,
+        trade_log=trade_log,
     )
 
     logging.info("傳送 Telegram 報告")
