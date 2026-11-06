@@ -30,6 +30,14 @@ class CandleCacheTests(unittest.TestCase):
             with self.assertRaises(HistoryLoadError):
                 save_candles(path, self.candles()[:2] + self.candles()[3:])
 
+    def test_cache_refuses_out_of_order_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "out-of-order.csv"
+            rows = self.candles()
+            rows[1], rows[2] = rows[2], rows[1]
+            with self.assertRaises(HistoryLoadError):
+                save_candles(path, rows)
+
     def test_cache_refuses_wrong_columns(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "bad.csv"
