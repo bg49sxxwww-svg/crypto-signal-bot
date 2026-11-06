@@ -1218,6 +1218,17 @@ def backtest_ema_triple(symbol, candles=None, trade_log=None):
 
 
 
+def d_rsi_filter(direction, rsi):
+    """D 組避免在 RSI 極端區追價；區間端點包含在內。"""
+    if rsi is None:
+        return False
+    if direction == "LONG":
+        return 55 <= rsi <= 68
+    if direction == "SHORT":
+        return 32 <= rsi <= 45
+    return False
+
+
 def backtest_ema_filtered(symbol, candles=None, trade_log=None):
     """
     D 組 RSI 過濾策略：
@@ -1371,7 +1382,7 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
                 if atr is not None and atr > 0 and rsi is not None:
                     next_open = candles[i + 1]["open"]
 
-                    if cross_up and trend_up and 55 <= rsi <= 68:
+                    if cross_up and trend_up and d_rsi_filter("LONG", rsi):
                         entry_fill = next_open * (1 + cost)
                         position = {
                             "side": "LONG",
@@ -1380,7 +1391,7 @@ def backtest_ema_filtered(symbol, candles=None, trade_log=None):
                             "stop": next_open - atr * 1.5,
                             "target": next_open + atr * 2.5,
                         }
-                    elif cross_down and trend_down and 32 <= rsi <= 45:
+                    elif cross_down and trend_down and d_rsi_filter("SHORT", rsi):
                         entry_fill = next_open * (1 - cost)
                         position = {
                             "side": "SHORT",
