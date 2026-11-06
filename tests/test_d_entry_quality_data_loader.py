@@ -1,5 +1,7 @@
 import unittest
 
+import requests
+
 from experiments.d_entry_quality.data_loader import (
     HOUR_MS,
     HistoryLoadError,
@@ -97,6 +99,46 @@ class HistoryLoaderTests(unittest.TestCase):
             fetch_okx_1h_history("BTCUSDT", 100, 100, session=FakeSession([]))
         with self.assertRaises(ValueError):
             fetch_okx_1h_history("BTC-USD", 0, HOUR_MS, session=FakeSession([]))
+
+
+    def test_retries_transient_connection_error_then_succeeds(self):
+        class RetrySession:
+            def __init__(self):
+                self.calls = 0
+
+            def get(self, url, params, timeout):
+                self.calls += 1
+                if self.calls == 1:
+                    raise requests.ConnectionError("temporary network failure")
+                return FakeResponse([okx_row(0)])
+
+        session = RetrySession()
+        rows, report = fetch_okx_1h_history(
+            "BTCUSDT", 0, HOUR_MS, session=session, sleep_fn=lambda _: None
+        )
+        self.assertEqual(session.calls, 2)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(report["complete"])
+
+    def test_nonretryable_api_error_fails_immediately(self):
+        class ErrorResponse(FakeResponse):
+            def json(self):
+                return {"code": "51000", "msg": "Invalid parameter", "data": []}
+
+        class ErrorSession:
+            def __init__(self):
+                self.calls = 0
+
+            def get(self, url, params, timeout):
+                self.calls += 1
+                return ErrorResponse([])
+
+        session = ErrorSession()
+        with self.assertRaises(HistoryLoadError):
+            fetch_okx_1h_history(
+                "BTCUSDT", 0, HOUR_MS, session=session, sleep_fn=lambda _: None
+            )
+        self.assertEqual(session.calls, 1)
 
 
 if __name__ == "__main__":
